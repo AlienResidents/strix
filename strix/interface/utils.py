@@ -1131,6 +1131,26 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
     )
 
 
+def read_target_list_file(path_str: str) -> list[str]:
+    """Read scan targets from a file, one target per non-empty line."""
+    if not path_str or not path_str.strip():
+        raise ValueError("--target-list path must not be empty.")
+
+    path = Path(path_str).expanduser()
+    if not path.is_file():
+        raise ValueError(f"Target list file '{path_str}' is not an existing file.")
+
+    try:
+        targets = [line.strip() for line in path.read_text(encoding="utf-8").splitlines()]
+    except OSError as e:
+        raise ValueError(f"Failed to read target list file '{path_str}': {e!s}") from e
+
+    targets = [target for target in targets if target]
+    if not targets:
+        raise ValueError(f"Target list file '{path_str}' is empty.")
+    return targets
+
+
 def sanitize_name(name: str) -> str:
     sanitized = re.sub(r"[^A-Za-z0-9._-]", "-", name.strip())
     return sanitized or "target"
