@@ -345,7 +345,7 @@ Examples:
   strix --target https://github.com/user/repo --target https://example.com
   strix --target ./my-project --target https://staging.example.com --target https://prod.example.com
 
-  # Targets from a file, one target per line
+  # Targets from a file, one target per non-empty, non-comment line
   strix --target-list ./targets.txt
 
   # Custom instructions (inline)
@@ -378,8 +378,8 @@ Examples:
         type=str,
         action="append",
         metavar="PATH",
-        help="Path to a file containing targets, one per non-empty line. Can be specified "
-        "multiple times and combined with --target.",
+        help="Path to a file containing targets, one per non-empty, non-comment line. "
+        "Can be specified multiple times and combined with --target.",
     )
     parser.add_argument(
         "--mount",

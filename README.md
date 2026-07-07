@@ -169,7 +169,7 @@ strix --target https://your-app.com --instruction "Perform authenticated testing
 # Multi-target testing (source code + deployed app)
 strix -t https://github.com/org/app -t https://your-app.com
 
-# Targets from a file, one target per non-empty line
+# Targets from a file, one target per non-empty, non-comment line
 strix --target-list ./targets.txt
 
 # White-box source-aware scan (local repository)

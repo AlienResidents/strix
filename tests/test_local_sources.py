@@ -175,9 +175,25 @@ def test_read_target_list_file_strips_blank_lines(tmp_path: Path) -> None:
     ]
 
 
+def test_read_target_list_file_ignores_comment_lines(tmp_path: Path) -> None:
+    target_list = tmp_path / "targets.txt"
+    target_list.write_text(
+        "# production targets\n"
+        "https://test1.com/\n"
+        "  # staging targets\n"
+        "http://test2.com:5789/\n",
+        encoding="utf-8",
+    )
+
+    assert read_target_list_file(str(target_list)) == [
+        "https://test1.com/",
+        "http://test2.com:5789/",
+    ]
+
+
 def test_read_target_list_file_rejects_empty_file(tmp_path: Path) -> None:
     target_list = tmp_path / "targets.txt"
-    target_list.write_text(" \n\n", encoding="utf-8")
+    target_list.write_text(" \n# no targets yet\n\n", encoding="utf-8")
 
     with pytest.raises(ValueError, match="is empty"):
         read_target_list_file(str(target_list))
@@ -186,6 +202,14 @@ def test_read_target_list_file_rejects_empty_file(tmp_path: Path) -> None:
 def test_read_target_list_file_rejects_missing_path(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not an existing file"):
         read_target_list_file(str(tmp_path / "missing.txt"))
+
+
+def test_read_target_list_file_rejects_non_utf8_file(tmp_path: Path) -> None:
+    target_list = tmp_path / "targets.txt"
+    target_list.write_bytes(b"https://test1.com/\xff\n")
+
+    with pytest.raises(ValueError, match="must be valid UTF-8 text"):
+        read_target_list_file(str(target_list))
 
 
 @pytest.mark.parametrize("empty", ["", "   "])

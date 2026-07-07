@@ -16,7 +16,7 @@ strix (--target <target> | --target-list <path> | --mount <path>) [options]
 </ParamField>
 
 <ParamField path="--target-list" type="string">
-  Path to a file containing targets, one per non-empty line. Can be specified multiple times and combined with `--target`.
+  Path to a file containing targets, one per non-empty, non-comment line. Lines starting with `#` are ignored. Can be specified multiple times and combined with `--target`.
 </ParamField>
 
 <ParamField path="--mount" type="string">
