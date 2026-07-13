@@ -85,6 +85,10 @@ def finding(severity: str) -> None:
 
 
 def end(report_state: ReportState, exit_reason: str = "completed") -> None:
+    if report_state.scarf_scan_ended_sent:
+        return
+    report_state.scarf_scan_ended_sent = True
+
     vulnerabilities_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for v in report_state.vulnerability_reports:
         sev = v.get("severity", "info").lower()
