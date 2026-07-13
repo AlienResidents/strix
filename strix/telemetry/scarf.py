@@ -89,6 +89,8 @@ def finding(severity: str) -> None:
 def end(report_state: ReportState, exit_reason: str = "completed") -> None:
     if report_state.scarf_scan_ended_sent:
         return
+    if report_state.scan_ended_exit_reason is None:
+        report_state.scan_ended_exit_reason = exit_reason
 
     vulnerabilities_counts = {"critical": 0, "high": 0, "medium": 0, "low": 0, "info": 0}
     for v in report_state.vulnerability_reports:
@@ -125,7 +127,7 @@ def end(report_state: ReportState, exit_reason: str = "completed") -> None:
         {
             **base_props(),
             "session": SESSION_ID,
-            "exit_reason": exit_reason,
+            "exit_reason": report_state.scan_ended_exit_reason,
             "duration_seconds": round(duration),
             "vulnerabilities_total": len(report_state.vulnerability_reports),
             **{f"vulnerabilities_{k}": v for k, v in vulnerabilities_counts.items()},
