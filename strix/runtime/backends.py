@@ -119,11 +119,12 @@ async def start_session_with_retry(
             if session is not None:
                 try:
                     await client.delete(session)
-                except Exception:  # noqa: BLE001
+                except Exception as teardown_error:
                     logger.warning(
-                        "Failed to tear down sandbox after start failure",
+                        "Failed to tear down sandbox after start failure; aborting retry",
                         exc_info=True,
                     )
+                    raise exc from teardown_error
             transient = _is_transient_start_error(exc)
             if not transient or attempt == max_attempts:
                 raise

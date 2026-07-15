@@ -33,9 +33,10 @@ class _FakeSession:
 
 
 class _FakeClient:
-    def __init__(self) -> None:
+    def __init__(self, *, delete_error: BaseException | None = None) -> None:
         self.created = 0
         self.deleted: list[_FakeSession] = []
+        self.delete_error = delete_error
 
     async def create(self) -> _FakeSession:
         self.created += 1
@@ -54,6 +55,8 @@ class _FakeClient:
 
     async def delete(self, session: _FakeSession) -> None:
         self.deleted.append(session)
+        if self.delete_error is not None:
+            raise self.delete_error
 
 
 async def test_transient_workspace_failure_retries_and_tears_down(
@@ -86,6 +89,28 @@ async def test_non_transient_workspace_failure_does_not_retry() -> None:
     with pytest.raises(LocalDirReadError):
         await start_session_with_retry(client, create_session, attempts=3)
 
+    assert client.created == 1
+    assert client.deleted == [session]
+
+
+async def test_teardown_failure_raises_original_error_without_retry() -> None:
+    start_error = WorkspaceStartError(
+        path=Path("/workspace"),
+        cause=TimeoutError("transient transport timeout"),
+    )
+    teardown_error = RuntimeError("teardown failed")
+    client = _FakeClient(delete_error=teardown_error)
+    session = _FakeSession([start_error])
+
+    async def create_session() -> _FakeSession:
+        client.created += 1
+        return session
+
+    with pytest.raises(WorkspaceStartError) as caught:
+        await start_session_with_retry(client, create_session, attempts=3)
+
+    assert caught.value is start_error
+    assert caught.value.__cause__ is teardown_error
     assert client.created == 1
     assert client.deleted == [session]
 
