@@ -759,6 +759,13 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
     results_text.append(str(results_path), style="#60a5fa")
     panel_parts.extend(["\n", results_text])
 
+    view_text = Text()
+    view_text.append("\n")
+    view_text.append("View", style="dim")
+    view_text.append("    ")
+    view_text.append(f"strix view {args.run_name}", style="#22c55e")
+    panel_parts.extend(["\n", view_text])
+
     if not scan_completed:
         resume_text = Text()
         resume_text.append("\n")
@@ -845,6 +852,14 @@ def main() -> None:
 
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    # `strix view [<run>]` is a viewer-only subcommand, dispatched before the
+    # scan argument parser (which requires a target) and before any scan setup.
+    if len(sys.argv) > 1 and sys.argv[1] == "view":
+        from strix.viewer.cli import run_view
+
+        run_view(sys.argv[2:])
+        return
 
     args = parse_arguments()
 

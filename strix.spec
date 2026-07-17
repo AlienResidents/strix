@@ -25,6 +25,13 @@ for tcss_file in strix_root.rglob('*.tcss'):
     rel_path = tcss_file.relative_to(project_root)
     datas.append((str(tcss_file), str(rel_path.parent)))
 
+# Prebuilt local-viewer SPA (served by `strix view`).
+viewer_dist = strix_root / 'viewer' / 'viewer_dist'
+for asset in viewer_dist.rglob('*'):
+    if asset.is_file():
+        rel_path = asset.relative_to(project_root)
+        datas.append((str(asset), str(rel_path.parent)))
+
 datas += collect_data_files('textual')
 
 datas += collect_data_files('tiktoken')
@@ -151,6 +158,10 @@ hiddenimports = [
     'strix.report.dedupe',
     'strix.report.state',
     'strix.report.writer',
+    'strix.viewer',
+    'strix.viewer.cli',
+    'strix.viewer.server',
+    'strix.viewer.transcript',
     'strix.runtime',
     'strix.runtime.backends',
     'strix.runtime.caido_bootstrap',

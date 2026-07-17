@@ -142,6 +142,27 @@ def end(report_state: "ReportState", exit_reason: str = "completed") -> None:
     )
 
 
+def viewer_opened(source: str, live: bool) -> None:
+    _send(
+        "viewer_opened",
+        {
+            **base_props(),
+            "source": source,
+            "live": live,
+        },
+    )
+
+
+def viewer_cta_clicked(cta: str) -> None:
+    _send(
+        "viewer_cta_clicked",
+        {
+            **base_props(),
+            "cta": cta[:64],
+        },
+    )
+
+
 def error(error_type: str) -> None:
     props = {**base_props(), "error_type": error_type}
     _send("error", props)
