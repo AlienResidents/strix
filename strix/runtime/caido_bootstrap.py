@@ -10,6 +10,7 @@ exposed-port URL for all subsequent SDK calls.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 from typing import TYPE_CHECKING
@@ -79,6 +80,12 @@ async def _login_as_guest(
     raise RuntimeError(f"loginAsGuest failed after {attempts} attempts: {last_err}")
 
 
+async def _aclose_quietly(client: Client) -> None:
+    """Best-effort close of a client whose setup failed; never raises."""
+    with contextlib.suppress(Exception):
+        await client.aclose()
+
+
 async def _connect_client(
     session: BaseSandboxSession,
     *,
@@ -107,11 +114,15 @@ async def bootstrap_caido(
     logger.info("Bootstrapping Caido client (host=%s, container=%s)", host_url, container_url)
 
     client = await _connect_client(session, host_url=host_url, container_url=container_url)
-
-    project = await client.project.create(
-        CreateProjectOptions(name="sandbox", temporary=True),
-    )
-    await client.project.select(project.id)
+    try:
+        project = await client.project.create(
+            CreateProjectOptions(name="sandbox", temporary=True),
+        )
+        await client.project.select(project.id)
+    except BaseException:
+        # Don't leak the connected transport if project setup fails.
+        await _aclose_quietly(client)
+        raise
     logger.info("Caido project selected: %s", project.id)
     return client, str(project.id)
 
@@ -130,5 +141,11 @@ async def reconnect_caido(
     """
     logger.info("Reconnecting Caido client (host=%s, project=%s)", host_url, project_id)
     client = await _connect_client(session, host_url=host_url, container_url=container_url)
-    await client.project.select(project_id)
+    try:
+        await client.project.select(project_id)
+    except BaseException:
+        # A missing/unavailable project must not leave the freshly-connected
+        # transport dangling — otherwise every retry leaks another one.
+        await _aclose_quietly(client)
+        raise
     return client
