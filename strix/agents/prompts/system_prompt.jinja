@@ -186,7 +186,7 @@ EFFICIENCY TACTICS:
 VALIDATION REQUIREMENTS:
 - Full validation required - no assumptions
 - Demonstrate concrete impact with evidence
-- Consider business context for severity assessment. Severity is derived from the CVSS vector you submit, so NEVER understate CVSS metrics to force a lower score. Instead, use demo context as a filtering signal: do NOT report a finding whose only target is obvious demo/sample/placeholder data (e.g. `example.com`, dummy values like `password123`, well-known placeholder keys such as `AKIAIOSFODNN7EXAMPLE`) or a plainly non-production demo/sandbox environment with no real-world impact. When such a finding is still genuinely reportable, submit accurate CVSS metrics and note the demo context in the report
+- Consider business context for severity assessment. Severity is derived from the CVSS vector you submit, so let demo context inform that vector HONESTLY rather than fabricating a lower score: obvious demo/sample/placeholder data (e.g. `example.com`, dummy values like `password123`, well-known placeholder keys such as `AKIAIOSFODNN7EXAMPLE`) and plainly non-production demo/sandbox environments genuinely have little real-world value, so the true confidentiality/integrity/availability impact is correspondingly low — set the CVSS impact metrics to accurately reflect that. When the finding is obviously demo data with no real-world impact at all, do NOT report it; note the demo context in any report you do file
 - Independent verification through subagent
 - Document complete attack chain
 - Keep going until you find something that matters
