@@ -16,7 +16,8 @@ import VulnerabilityDetail from "@/components/vulnerability/VulnerabilityDetail"
 import { ContentSection } from "@/components/vulnerability/ContentSection";
 import { IssueSeveritySummary } from "@/components/IssueSeveritySummary";
 import AgentGraph from "@/components/live/AgentGraph";
-import { AgentTranscript, buildGraphAgents } from "@/components/live/AgentTranscript";
+import { buildGraphAgents } from "@/components/live/AgentTranscript";
+import AgentDetailModal from "@/components/live/AgentDetailModal";
 import { severityCounts, type ParsedRunSummary } from "@/lib/local-run-parser";
 import { fetchAll, fetchRunSummary, fetchTranscript, fetchVulnerabilities, type LoadedRun } from "@/data/serverSource";
 
@@ -456,12 +457,10 @@ function UpsellRow() {
 function AgentsTab({ run }: { run: LoadedRun }) {
   const { agents, events } = run.transcript;
   const graphAgents = useMemo(() => buildGraphAgents(agents, events), [agents, events]);
-  // Default the transcript to the root agent (no parent) so something is always
-  // shown; the graph selection then drives which agent's transcript renders.
-  const rootId = useMemo(() => agents.find((a) => !a.parent_id)?.id ?? agents[0]?.id ?? null, [agents]);
+  // Clicking a graph node opens the agent's transcript in a modal (matching the
+  // cloud app); no node selected means no modal.
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const activeId = selectedId ?? rootId;
-  const activeAgent = agents.find((a) => a.id === activeId) ?? null;
+  const selectedAgent = selectedId ? (agents.find((a) => a.id === selectedId) ?? null) : null;
 
   return (
     <div className="space-y-5">
@@ -474,12 +473,12 @@ function AgentsTab({ run }: { run: LoadedRun }) {
           </span>
         </div>
         <p className="mt-1 mb-4 text-xs text-[#666]">
-          Select an agent to view its full transcript below.
+          Click an agent to open its full transcript.
         </p>
         <div className="h-[480px] rounded-lg border border-[#1a1a1a] overflow-hidden">
           <AgentGraph
             agents={graphAgents}
-            selectedAgentId={activeId}
+            selectedAgentId={selectedId}
             onSelectAgent={(id) => setSelectedId(id)}
             eventsLoaded
             eventsEmpty={graphAgents.size === 0}
@@ -488,10 +487,12 @@ function AgentsTab({ run }: { run: LoadedRun }) {
         </div>
       </div>
 
-      {activeAgent && (
-        <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
-          <AgentTranscript agent={activeAgent} events={events} />
-        </div>
+      {selectedAgent && (
+        <AgentDetailModal
+          agent={selectedAgent}
+          events={events}
+          onClose={() => setSelectedId(null)}
+        />
       )}
     </div>
   );
