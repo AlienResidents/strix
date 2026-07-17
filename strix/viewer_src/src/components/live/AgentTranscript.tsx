@@ -76,6 +76,19 @@ function eventSeq(id: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
+/**
+ * The SDK session we reconstruct includes each agent's incoming "user" messages:
+ * the subagent spawn prompt ("== Inherited context from parent =="), inter-agent
+ * message deliveries, and other large blobs. The cloud app never renders these
+ * as chat bubbles (its timeline is assistant "thinking" + tool executions, and
+ * inter-agent messages surface through the tool renderers). Mirror that: keep
+ * assistant messages and tool calls, drop incoming user/human messages.
+ */
+function isIncomingUserChat(event: TranscriptEvent): boolean {
+  const role = event.data?.role;
+  return event.type === "chat" && (role === "user" || role === "human");
+}
+
 const STATUS_STYLE: Record<string, string> = {
   completed: "text-emerald-400 border-emerald-500/30 bg-emerald-500/10",
   running: "text-blue-400 border-blue-500/30 bg-blue-500/10",
@@ -127,7 +140,8 @@ export function buildGraphAgents(
         const task = (args.task as string) ?? "";
         if (name && task) taskByName.set(name, task);
       }
-    } else {
+    } else if (!isIncomingUserChat(e)) {
+      // Count only assistant messages, matching what the transcript renders.
       messageCount.set(e.agent_id, (messageCount.get(e.agent_id) ?? 0) + 1);
     }
   }
@@ -162,7 +176,7 @@ export function AgentTranscript({
   const mine = useMemo(
     () =>
       events
-        .filter((e) => e.agent_id === agent.id)
+        .filter((e) => e.agent_id === agent.id && !isIncomingUserChat(e))
         .sort((a, b) => eventSeq(a.id) - eventSeq(b.id)),
     [events, agent.id]
   );
