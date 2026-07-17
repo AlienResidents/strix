@@ -20,31 +20,13 @@ import { buildGraphAgents } from "@/components/live/AgentTranscript";
 import AgentDetailModal from "@/components/live/AgentDetailModal";
 import { severityCounts, type ParsedRunSummary } from "@/lib/local-run-parser";
 import { fetchAll, fetchRunSummary, fetchTranscript, fetchVulnerabilities, type LoadedRun } from "@/data/serverSource";
-
-// All upsell / sign-up CTAs route anonymous local-viewer users to the public
-// cloud sign-up. Opened in a new tab so the local results stay put.
-const SIGNUP_URL = "https://app.strix.ai/api/auth/signup";
-
-// Best-effort, anonymous conversion tracking. The local server forwards this to
-// PostHog only if the user has telemetry enabled; it never blocks navigation.
-function trackCta(cta: string): void {
-  try {
-    const body = JSON.stringify({ event: "cta_clicked", cta });
-    if (typeof navigator !== "undefined" && navigator.sendBeacon) {
-      navigator.sendBeacon("/api/event", body);
-    } else {
-      void fetch("/api/event", { method: "POST", body, keepalive: true });
-    }
-  } catch {
-    /* analytics is best-effort */
-  }
-}
+import { SIGNUP_URL, trackCta } from "@/lib/cta";
 
 const TRUST_BANNER =
   "Your findings stay on your machine. They're rendered here locally in your browser and never uploaded or stored by Strix.";
 
 const SEVERITY_ORDER: VulnerabilitySeverity[] = ["critical", "high", "medium", "low"];
-const POLL_MS = 1000;
+const POLL_MS = 500;
 
 export default function App() {
   const [run, setRun] = useState<LoadedRun | null>(null);

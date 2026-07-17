@@ -1,6 +1,7 @@
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { AgentTranscript } from "./AgentTranscript";
+import { SIGNUP_URL, trackCta } from "@/lib/cta";
 import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
 
 /** Status -> the small leading dot color, matching the graph node styling. */
@@ -13,11 +14,15 @@ const STATUS_DOT: Record<string, string> = {
   failed: "bg-red-400",
 };
 
+/** Consider the user "at the bottom" within this many px. */
+const NEAR_BOTTOM_PX = 80;
+
 /**
  * Overlay modal showing a single agent's full transcript. Matches the cloud
- * app: a fixed-size panel with a pinned header (status dot + agent name) and
- * the transcript scrolling beneath it. Closes on backdrop click, the X button,
- * or Escape.
+ * app: a fixed-size panel with a pinned header (status dot + agent name), the
+ * transcript scrolling beneath it, and a footer. Auto-scrolls to follow new
+ * activity while the user is near the bottom (so a live run trails). Closes on
+ * backdrop click, the X button, or Escape.
  */
 export function AgentDetailModal({
   agent,
@@ -28,6 +33,24 @@ export function AgentDetailModal({
   events: TranscriptEvent[];
   onClose: () => void;
 }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(false);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  }, []);
+
+  // Follow new activity when the user is near the bottom (live trailing).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !nearBottom.current) return;
+    requestAnimationFrame(() => {
+      el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    });
+  }, [events]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -70,8 +93,22 @@ export function AgentDetailModal({
             <X className="h-4 w-4" />
           </button>
         </div>
-        <div className="flex-1 overflow-y-auto p-5">
+
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-5">
           <AgentTranscript agent={agent} events={events} showHeader={false} />
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#222] px-5 py-3">
+          <span className="text-xs text-[#888]">Steer agents live from your terminal.</span>
+          <a
+            href={SIGNUP_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackCta("steer_agent")}
+            className="text-xs font-medium text-[#60a5fa] hover:underline"
+          >
+            Upgrade to Pro to steer agents from the web &rarr;
+          </a>
         </div>
       </div>
     </div>
