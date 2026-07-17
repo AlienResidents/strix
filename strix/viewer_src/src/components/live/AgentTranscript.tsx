@@ -153,9 +153,11 @@ export function buildGraphAgents(
 export function AgentTranscript({
   agent,
   events,
+  showHeader = true,
 }: {
   agent: TranscriptAgent;
   events: TranscriptEvent[];
+  showHeader?: boolean;
 }) {
   const mine = useMemo(
     () =>
@@ -170,21 +172,25 @@ export function AgentTranscript({
 
   return (
     <div>
-      <div className="flex items-center gap-2 flex-wrap mb-1">
-        <span className="text-base font-semibold text-white truncate">{agent.name}</span>
-        <span
-          className={`flex-shrink-0 text-xs font-medium capitalize px-2 py-0.5 rounded-full border ${
-            STATUS_STYLE[agent.status] ?? "text-[#aaa] border-[#333] bg-[#1a1a1a]"
-          }`}
-        >
-          {agent.status}
-        </span>
-        <span className="font-mono text-xs text-[#555]">{agent.id}</span>
-      </div>
-      <p className="text-xs text-[#666] mb-4">
-        {msgCount} message{msgCount === 1 ? "" : "s"} · {toolCount} tool call
-        {toolCount === 1 ? "" : "s"}
-      </p>
+      {showHeader && (
+        <>
+          <div className="flex items-center gap-2 flex-wrap mb-1">
+            <span className="text-base font-semibold text-white truncate">{agent.name}</span>
+            <span
+              className={`flex-shrink-0 text-xs font-medium capitalize px-2 py-0.5 rounded-full border ${
+                STATUS_STYLE[agent.status] ?? "text-[#aaa] border-[#333] bg-[#1a1a1a]"
+              }`}
+            >
+              {agent.status}
+            </span>
+            <span className="font-mono text-xs text-[#555]">{agent.id}</span>
+          </div>
+          <p className="text-xs text-[#666] mb-4">
+            {msgCount} message{msgCount === 1 ? "" : "s"} · {toolCount} tool call
+            {toolCount === 1 ? "" : "s"}
+          </p>
+        </>
+      )}
 
       {mine.length === 0 ? (
         <p className="text-sm text-[#666]">No recorded activity for this agent.</p>
