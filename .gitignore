@@ -10,14 +10,16 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
+# Anchored to the repo root: these are Python build-artifact dir names, but
+# unanchored they also match nested source dirs (e.g. the viewer's src/lib).
+/build/
 develop-eggs/
 dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/
+/lib64/
 parts/
 sdist/
 var/
@@ -52,7 +54,7 @@ pip-delete-this-directory.txt
 .env.production.local
 
 # MongoDB
-data/
+/data/
 mongod.log
 *.mongodb
 *.mongorc.js
