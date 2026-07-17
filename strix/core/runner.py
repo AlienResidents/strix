@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import json
 import logging
@@ -283,6 +284,11 @@ async def run_strix_scan(
             "coordinator": coordinator,
             "sandbox_session": bundle["session"],
             "caido_client": bundle["caido_client"],
+            # One shared Caido client is reused by every agent in the scan; its
+            # GraphQL transport is not safe for concurrent use. Child contexts
+            # are shallow copies (``dict(parent_ctx)``) so they inherit this
+            # same lock object, serializing all proxy calls scan-wide.
+            "caido_lock": asyncio.Lock(),
             "agent_id": root_id,
             "parent_id": None,
             "interactive": interactive,
