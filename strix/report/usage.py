@@ -19,6 +19,8 @@ class LLMUsageLedger:
         self._agent_usage: dict[str, Usage] = {}
         self._agent_metadata: dict[str, dict[str, str]] = {}
         self._total_cost = 0.0
+        self._observed_cost = 0.0
+        self._routed_estimated_cost = 0.0
 
     def record(
         self,
@@ -41,9 +43,14 @@ class LLMUsageLedger:
         if model:
             metadata["model"] = model
 
-        if not _is_litellm_routed(model):
-            estimated = _estimate_litellm_cost(usage, model)
-            if estimated:
+        estimated = _estimate_litellm_cost(usage, model)
+        if estimated:
+            if _is_litellm_routed(model):
+                # Fallback for routed models whose provider-reported cost never
+                # arrives (e.g. missing LiteLLM pricing map entry); only counted
+                # when no observed cost is recorded for the run.
+                self._routed_estimated_cost += estimated
+            else:
                 self._total_cost += estimated
 
         return True
@@ -51,14 +58,21 @@ class LLMUsageLedger:
     def record_observed_cost(self, cost: float) -> None:
         if isinstance(cost, int | float) and cost > 0:
             self._total_cost += float(cost)
+            self._observed_cost += float(cost)
+
+    def _effective_cost(self) -> float:
+        if self._observed_cost > 0:
+            return self._total_cost
+        return self._total_cost + self._routed_estimated_cost
 
     @property
     def total_cost(self) -> float:
-        return _round_cost(self._total_cost)
+        return _round_cost(self._effective_cost())
 
     def to_record(self) -> dict[str, Any]:
         record = serialize_usage(self._total_usage)
-        record["cost"] = _round_cost(self._total_cost)
+        effective_cost = self._effective_cost()
+        record["cost"] = _round_cost(effective_cost)
         record["agents"] = []
 
         agent_tokens = {aid: _resolve_total_tokens(u) for aid, u in self._agent_usage.items()}
@@ -67,7 +81,7 @@ class LLMUsageLedger:
             usage = self._agent_usage[agent_id]
             metadata = self._agent_metadata.get(agent_id, {})
             agent_cost = (
-                self._total_cost * (agent_tokens[agent_id] / total_tokens) if total_tokens else 0.0
+                effective_cost * (agent_tokens[agent_id] / total_tokens) if total_tokens else 0.0
             )
 
             agent_record = serialize_usage(usage)
@@ -88,6 +102,8 @@ class LLMUsageLedger:
         self._agent_usage.clear()
         self._agent_metadata.clear()
         self._total_cost = 0.0
+        self._observed_cost = 0.0
+        self._routed_estimated_cost = 0.0
 
         if not isinstance(raw_usage, dict):
             return
