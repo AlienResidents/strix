@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
 import os
 import time
 import urllib.request
@@ -24,6 +26,9 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from caido_sdk_client import Client as CaidoClient
+
+
+logger = logging.getLogger(__name__)
 
 
 RequestPart = Literal["request", "response"]
@@ -103,6 +108,14 @@ async def _new_client() -> Client:
     return client
 
 
+async def _safe_aclose(client: Client | None) -> None:
+    """Close a (possibly dead) client without letting teardown errors escape."""
+    if client is None:
+        return
+    with contextlib.suppress(Exception):
+        await client.aclose()
+
+
 def _is_connection_error(exc: BaseException) -> bool:
     message = str(exc).lower()
     if any(marker in message for marker in _CONNECTION_ERROR_MARKERS):
@@ -126,15 +139,22 @@ async def get_client() -> Client:
         return client
 
 
-async def call_with_client[T](fn: Callable[[Client], Awaitable[T]]) -> T:
+async def call_with_client[T](
+    fn: Callable[[Client], Awaitable[T]], *, idempotent: bool = True
+) -> T:
     """Run ``fn`` against the shared client, serialized and reconnect-safe.
 
     The Caido GraphQL transport is not safe for concurrent use: two in-flight
     requests race and raise "Transport is already connected". All proxy calls
     are therefore serialized through ``_CLIENT_LOCK``. If the cached client's
     transport has since died ("Connector is closed" / "Server disconnected"),
-    the stale client is rebuilt and the call retried once, instead of every
-    subsequent call in the run failing against a dead client.
+    the stale client is closed and rebuilt so subsequent calls stop failing
+    against a dead client.
+
+    ``fn`` is only re-run automatically when ``idempotent`` is true. For
+    mutations (replay, scope create/update/delete) a connection error may
+    arrive *after* Caido applied the change, so we heal the client for future
+    calls but re-raise instead of risking a double-apply.
     """
     async with _CLIENT_LOCK:
         client = _CLIENT_CACHE.get("default")
@@ -146,9 +166,46 @@ async def call_with_client[T](fn: Callable[[Client], Awaitable[T]]) -> T:
         except Exception as exc:
             if not _is_connection_error(exc):
                 raise
-            client = await _new_client()
-            _CLIENT_CACHE["default"] = client
-            return await fn(client)
+            new_client = await _new_client()
+            _CLIENT_CACHE["default"] = new_client
+            await _safe_aclose(client)
+            if not idempotent:
+                raise
+            return await fn(new_client)
+
+
+class SharedCaidoClient:
+    """Serialized, reconnect-safe wrapper around one host-side Caido client.
+
+    Every agent in a scan shares a single instance (propagated through the
+    shallow-copied run context). ``call`` serializes access — the SDK transport
+    is not concurrency-safe — and, when the transport dies, rebuilds the client
+    via ``reconnect`` (which preserves the Caido project) and closes the dead
+    one, so a transient Caido restart no longer disables proxy tools for the
+    rest of the scan.
+    """
+
+    def __init__(self, client: Client, reconnect: Callable[[], Awaitable[Client]]) -> None:
+        self._client = client
+        self._reconnect = reconnect
+        self._lock = asyncio.Lock()
+
+    async def call[T](self, fn: Callable[[Client], Awaitable[T]], *, idempotent: bool = True) -> T:
+        async with self._lock:
+            try:
+                return await fn(self._client)
+            except Exception as exc:
+                if not _is_connection_error(exc):
+                    raise
+                dead, self._client = self._client, await self._reconnect()
+                await _safe_aclose(dead)
+                if not idempotent:
+                    raise
+                return await fn(self._client)
+
+    async def aclose(self) -> None:
+        async with self._lock:
+            await _safe_aclose(self._client)
 
 
 async def close_client() -> None:
@@ -489,7 +546,9 @@ async def repeat_request(
         )
         return await replay_send_raw(client, raw=raw, connection=connection)
 
-    return await call_with_client(_run)
+    # A replay mutates server state; don't auto-retry if the transport dies
+    # mid-send (the request may already have been sent).
+    return await call_with_client(_run, idempotent=False)
 
 
 async def scope_rules(
@@ -510,7 +569,8 @@ async def scope_rules(
             scope_name=scope_name,
         )
 
-    return await call_with_client(_run)
+    # get/list are read-only and safe to retry; create/update/delete mutate.
+    return await call_with_client(_run, idempotent=action in {"get", "list"})
 
 
 async def _scope_rules_with_client(
@@ -759,6 +819,7 @@ async def view_sitemap_entry(entry_id: str) -> dict[str, Any]:
 __all__ = [
     "RequestPart",
     "ScopeAction",
+    "SharedCaidoClient",
     "SitemapDepth",
     "SortBy",
     "SortOrder",

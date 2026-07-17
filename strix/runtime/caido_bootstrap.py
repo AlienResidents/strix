@@ -79,23 +79,56 @@ async def _login_as_guest(
     raise RuntimeError(f"loginAsGuest failed after {attempts} attempts: {last_err}")
 
 
-async def bootstrap_caido(
+async def _connect_client(
     session: BaseSandboxSession,
     *,
     host_url: str,
     container_url: str,
 ) -> Client:
-    """Connect to the in-container Caido sidecar and select a fresh project."""
-    logger.info("Bootstrapping Caido client (host=%s, container=%s)", host_url, container_url)
-
     access_token = await _login_as_guest(session, container_url=container_url)
-
     client = Client(host_url, auth=TokenAuthOptions(token=access_token))
     await client.connect()
+    return client
+
+
+async def bootstrap_caido(
+    session: BaseSandboxSession,
+    *,
+    host_url: str,
+    container_url: str,
+) -> tuple[Client, str]:
+    """Connect to the in-container Caido sidecar and select a fresh project.
+
+    Returns the connected client and the id of the temporary project it
+    selected. The project id lets :func:`reconnect_caido` rebuild a dead
+    transport while staying on the *same* project (and its captured traffic)
+    instead of creating a new empty one.
+    """
+    logger.info("Bootstrapping Caido client (host=%s, container=%s)", host_url, container_url)
+
+    client = await _connect_client(session, host_url=host_url, container_url=container_url)
 
     project = await client.project.create(
         CreateProjectOptions(name="sandbox", temporary=True),
     )
     await client.project.select(project.id)
     logger.info("Caido project selected: %s", project.id)
+    return client, str(project.id)
+
+
+async def reconnect_caido(
+    session: BaseSandboxSession,
+    *,
+    host_url: str,
+    container_url: str,
+    project_id: str,
+) -> Client:
+    """Rebuild a Caido client after its transport died, keeping the project.
+
+    Re-authenticates, reconnects, and re-selects the existing project so the
+    caller keeps access to the traffic captured before the disconnect.
+    """
+    logger.info("Reconnecting Caido client (host=%s, project=%s)", host_url, project_id)
+    client = await _connect_client(session, host_url=host_url, container_url=container_url)
+    await client.project.select(project_id)
     return client

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import dataclasses
 import json
 import logging
@@ -15,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from agents import RunContextWrapper, function_tool
 
 from strix.tools.proxy import caido_api
+from strix.tools.proxy.caido_api import SharedCaidoClient
 
 
 logger = logging.getLogger(__name__)
@@ -30,7 +29,7 @@ if TYPE_CHECKING:
         SortOrder,
     )
 else:
-    from strix.tools.proxy.caido_api import (  # noqa: TC001
+    from strix.tools.proxy.caido_api import (
         RequestPart,
         SitemapDepth,
         SortBy,
@@ -41,26 +40,18 @@ else:
 ScopeAction = Literal["get", "list", "create", "update", "delete"]
 
 
-def _ctx_client(ctx: RunContextWrapper) -> Client | None:
-    inner = ctx.context if isinstance(ctx.context, dict) else {}
-    return inner.get("caido_client")
+def _ctx_proxy(ctx: RunContextWrapper) -> SharedCaidoClient | None:
+    """Return the scan-wide serialized, reconnect-safe Caido client holder.
 
-
-def _ctx_lock(ctx: RunContextWrapper) -> contextlib.AbstractAsyncContextManager[None]:
-    """Return the scan-wide lock serializing access to the shared Caido client.
-
-    All agents in a scan share one ``caido_client`` whose GraphQL transport is
-    not concurrency-safe (parallel calls raise "Transport is already
-    connected", and racing session teardown yields "Connector is closed" /
-    "Server disconnected"). Holding this lock around every proxy call serializes
-    them. Falls back to a no-op context when no lock is present (e.g. standalone
-    tool invocation outside a scan run).
+    All agents in a scan share one :class:`SharedCaidoClient` whose GraphQL
+    transport is not concurrency-safe (parallel calls raise "Transport is
+    already connected"). ``SharedCaidoClient.call`` serializes access and
+    rebuilds the transport if it dies mid-scan. Returns ``None`` when no holder
+    is present (e.g. standalone tool invocation outside a scan run).
     """
     inner = ctx.context if isinstance(ctx.context, dict) else {}
-    lock = inner.get("caido_lock")
-    if isinstance(lock, asyncio.Lock):
-        return lock
-    return contextlib.nullcontext()
+    proxy = inner.get("caido_client")
+    return proxy if isinstance(proxy, SharedCaidoClient) else None
 
 
 def _to_tool_json(value: Any) -> Any:
@@ -193,13 +184,13 @@ async def list_requests(
         sort_order: ``asc`` or ``desc``.
         scope_id: Restrict to a Caido scope (managed via ``scope_rules``).
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
 
     try:
-        async with _ctx_lock(ctx):
-            connection = await caido_api.list_requests_with_client(
+        connection = await proxy.call(
+            lambda client: caido_api.list_requests_with_client(
                 client,
                 httpql_filter=httpql_filter,
                 first=first,
@@ -208,6 +199,7 @@ async def list_requests(
                 sort_order=sort_order,
                 scope_id=scope_id,
             )
+        )
 
         entries = []
         for edge in connection.edges:
@@ -299,13 +291,14 @@ async def view_request(
         page: 1-indexed page number (only when no ``search_pattern``).
         page_size: Lines per page.
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
 
     try:
-        async with _ctx_lock(ctx):
-            result = await caido_api.get_request_with_client(client, request_id, part=part)
+        result = await proxy.call(
+            lambda client: caido_api.get_request_with_client(client, request_id, part=part)
+        )
         if result is None:
             return json.dumps(
                 {"success": False, "error": f"Request {request_id} not found"},
@@ -415,33 +408,38 @@ async def repeat_request(
             - ``body`` — replace the body string entirely.
             - ``cookies`` — dict of cookies to add/update.
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
     mods = modifications or {}
 
-    try:
-        async with _ctx_lock(ctx):
-            result = await caido_api.get_request_with_client(client, request_id, part="request")
-            if result is None or result.request.raw is None:
-                return json.dumps(
-                    {"success": False, "error": f"Request {request_id} not found"},
-                    ensure_ascii=False,
-                    default=str,
-                )
+    async def _do(client: Client) -> dict[str, Any] | None:
+        result = await caido_api.get_request_with_client(client, request_id, part="request")
+        if result is None or result.request.raw is None:
+            return None
+        original = result.request
+        raw_str = result.request.raw.decode("utf-8", errors="replace")
+        components = caido_api.parse_raw_request(raw_str)
+        full_url = caido_api.full_url_from_components(original, components, mods)
+        modified = caido_api.apply_modifications(components, mods, full_url)
+        connection, raw = caido_api.build_raw_request(
+            method=modified["method"],
+            url=modified["url"],
+            headers=modified["headers"],
+            body=modified["body"],
+        )
+        return await caido_api.replay_send_raw(client, raw=raw, connection=connection)
 
-            original = result.request
-            raw_str = result.request.raw.decode("utf-8", errors="replace")
-            components = caido_api.parse_raw_request(raw_str)
-            full_url = caido_api.full_url_from_components(original, components, mods)
-            modified = caido_api.apply_modifications(components, mods, full_url)
-            connection, raw = caido_api.build_raw_request(
-                method=modified["method"],
-                url=modified["url"],
-                headers=modified["headers"],
-                body=modified["body"],
+    try:
+        # A replay mutates target state, so don't auto-retry on a mid-send
+        # transport failure (the request may already have been sent).
+        replay = await proxy.call(_do, idempotent=False)
+        if replay is None:
+            return json.dumps(
+                {"success": False, "error": f"Request {request_id} not found"},
+                ensure_ascii=False,
+                default=str,
             )
-            replay = await caido_api.replay_send_raw(client, raw=raw, connection=connection)
         return _format_replay_tool_result(replay)
     except Exception as exc:  # noqa: BLE001
         return _err("repeat_request", exc)
@@ -494,18 +492,19 @@ async def list_sitemap(
             (recursive subtree). Only meaningful with ``parent_id``.
         page: 1-indexed page (30 entries per page).
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
     try:
-        async with _ctx_lock(ctx):
-            payload = await caido_api.list_sitemap_with_client(
+        payload = await proxy.call(
+            lambda client: caido_api.list_sitemap_with_client(
                 client,
                 scope_id=scope_id,
                 parent_id=parent_id,
                 depth=depth,
                 page=page,
             )
+        )
         return json.dumps(payload, ensure_ascii=False, default=str)
     except Exception as exc:  # noqa: BLE001
         return _err("list_sitemap", exc)
@@ -526,12 +525,13 @@ async def view_sitemap_entry(
     Args:
         entry_id: ID from ``list_sitemap`` (or any nested entry).
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
     try:
-        async with _ctx_lock(ctx):
-            payload = await caido_api.view_sitemap_entry_with_client(client, entry_id)
+        payload = await proxy.call(
+            lambda client: caido_api.view_sitemap_entry_with_client(client, entry_id)
+        )
         return json.dumps(payload, ensure_ascii=False, default=str)
     except Exception as exc:  # noqa: BLE001
         return _err("view_sitemap_entry", exc)
@@ -583,80 +583,85 @@ async def scope_rules(
         scope_id: Required for ``get`` / ``update`` / ``delete``.
         scope_name: Required for ``create`` / ``update``.
     """
-    client = _ctx_client(ctx)
-    if client is None:
+    proxy = _ctx_proxy(ctx)
+    if proxy is None:
         return _no_client()
 
     try:
-        async with _ctx_lock(ctx):
-            if action == "list":
-                scopes = await caido_api.scope_list(client)
-                return json.dumps(
-                    {"success": True, "scopes": [_to_tool_json(s) for s in scopes]},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            if action == "get":
-                if not scope_id:
-                    return json.dumps(
-                        {"success": False, "error": "Scope_id is required for action='get'"},
-                        ensure_ascii=False,
-                        default=str,
-                    )
-                scope = await caido_api.scope_get(client, scope_id)
-                return json.dumps(
-                    {"success": True, "scope": _to_tool_json(scope)},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            if action == "create":
-                if not scope_name:
-                    return json.dumps(
-                        {"success": False, "error": "Scope_name is required for action='create'"},
-                        ensure_ascii=False,
-                        default=str,
-                    )
-                scope = await caido_api.scope_create(
-                    client, name=scope_name, allowlist=allowlist, denylist=denylist
-                )
-                return json.dumps(
-                    {"success": True, "scope": _to_tool_json(scope)},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            if action == "update":
-                if not scope_id or not scope_name:
-                    return json.dumps(
-                        {
-                            "success": False,
-                            "error": "Scope_id and scope_name are required for action='update'",
-                        },
-                        ensure_ascii=False,
-                        default=str,
-                    )
-                scope = await caido_api.scope_update(
-                    client, scope_id, name=scope_name, allowlist=allowlist, denylist=denylist
-                )
-                return json.dumps(
-                    {"success": True, "scope": _to_tool_json(scope)},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            if not scope_id:
-                return json.dumps(
-                    {"success": False, "error": "Scope_id is required for action='delete'"},
-                    ensure_ascii=False,
-                    default=str,
-                )
-            await caido_api.scope_delete(client, scope_id)
+        if action == "list":
+            scopes = await proxy.call(caido_api.scope_list)
             return json.dumps(
-                {
-                    "success": True,
-                    "deleted": scope_id,
-                    "message": f"Scope {scope_id} deleted",
-                },
+                {"success": True, "scopes": [_to_tool_json(s) for s in scopes]},
                 ensure_ascii=False,
                 default=str,
             )
+        if action == "get":
+            if not scope_id:
+                return json.dumps(
+                    {"success": False, "error": "Scope_id is required for action='get'"},
+                    ensure_ascii=False,
+                    default=str,
+                )
+            scope = await proxy.call(lambda client: caido_api.scope_get(client, scope_id))
+            return json.dumps(
+                {"success": True, "scope": _to_tool_json(scope)},
+                ensure_ascii=False,
+                default=str,
+            )
+        if action == "create":
+            if not scope_name:
+                return json.dumps(
+                    {"success": False, "error": "Scope_name is required for action='create'"},
+                    ensure_ascii=False,
+                    default=str,
+                )
+            scope = await proxy.call(
+                lambda client: caido_api.scope_create(
+                    client, name=scope_name, allowlist=allowlist, denylist=denylist
+                ),
+                idempotent=False,
+            )
+            return json.dumps(
+                {"success": True, "scope": _to_tool_json(scope)},
+                ensure_ascii=False,
+                default=str,
+            )
+        if action == "update":
+            if not scope_id or not scope_name:
+                return json.dumps(
+                    {
+                        "success": False,
+                        "error": "Scope_id and scope_name are required for action='update'",
+                    },
+                    ensure_ascii=False,
+                    default=str,
+                )
+            scope = await proxy.call(
+                lambda client: caido_api.scope_update(
+                    client, scope_id, name=scope_name, allowlist=allowlist, denylist=denylist
+                ),
+                idempotent=False,
+            )
+            return json.dumps(
+                {"success": True, "scope": _to_tool_json(scope)},
+                ensure_ascii=False,
+                default=str,
+            )
+        if not scope_id:
+            return json.dumps(
+                {"success": False, "error": "Scope_id is required for action='delete'"},
+                ensure_ascii=False,
+                default=str,
+            )
+        await proxy.call(lambda client: caido_api.scope_delete(client, scope_id), idempotent=False)
+        return json.dumps(
+            {
+                "success": True,
+                "deleted": scope_id,
+                "message": f"Scope {scope_id} deleted",
+            },
+            ensure_ascii=False,
+            default=str,
+        )
     except Exception as exc:  # noqa: BLE001
         return _err("scope_rules", exc)
