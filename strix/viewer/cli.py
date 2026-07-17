@@ -58,8 +58,7 @@ def run_view(argv: list[str]) -> None:
     if not bundle_is_built():
         console.print(
             "[bold red]Viewer UI is not built.[/]\n"
-            "Build it with: [cyan]npm --prefix strix/viewer_src ci && "
-            "npm --prefix strix/viewer_src run build[/]"
+            "Build it with: [cyan]cd strix/viewer_src && npm ci && npm run build[/]"
         )
         raise SystemExit(1)
 

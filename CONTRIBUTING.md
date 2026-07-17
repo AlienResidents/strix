@@ -108,7 +108,7 @@ JS build. If you change anything under `strix/viewer_src/`, rebuild and commit
 the output:
 
 ```bash
-make viewer   # or: npm --prefix strix/viewer_src ci && npm --prefix strix/viewer_src run build
+make viewer   # or: cd strix/viewer_src && npm ci && npm run build
 ```
 
 Commit both the source change and the regenerated `strix/viewer/viewer_dist/`.
