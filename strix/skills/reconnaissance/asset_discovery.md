@@ -7,6 +7,8 @@ description: Passive asset and attack-surface discovery via certificate transpar
 
 Most engagements start from a small seed (one domain, one org name) but the real attack surface is far larger: forgotten hosts, staging/internal-named services, acquisitions, and infrastructure that never appears in a wordlist. Build a broad, deduplicated inventory using passive intelligence — certificate transparency, TLS certificate metadata, passive DNS, and ASN/IP data — then collapse it into a probed, classified attack surface. The aim is coverage and pivoting: every certificate, DNS record, and IP is a lead to more assets.
 
+Only use this skill when all subdomains and related assets of the target are in scope — broad discovery pulls in hosts far beyond the seed.
+
 ## Attack Surface
 
 - Hosts discoverable via issued certificates (CT logs) but absent from DNS brute force
