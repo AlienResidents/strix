@@ -1,9 +1,12 @@
+import hashlib
+import io
 import json
 import platform
 import time
 from pathlib import Path
 
 import pytest
+from rich.console import Console
 
 from strix.interface import update_check
 
@@ -109,13 +112,11 @@ def test_get_upgrade_command_all_methods() -> None:
     assert update_check.get_upgrade_command("pip") == "pip install --upgrade strix-agent"
 
 
-def test_self_update_non_binary_prints_command(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_self_update_non_binary_prints_command(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_check, "is_binary_install", lambda: False)
-    assert update_check.self_update() is False
-    out = capsys.readouterr().out
-    assert "upgrade" in out
+    buffer = io.StringIO()
+    assert update_check.self_update(Console(file=buffer)) is False
+    assert "upgrade" in buffer.getvalue()
 
 
 def test_self_update_already_latest(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -123,6 +124,12 @@ def test_self_update_already_latest(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(update_check, "_fetch_latest_version", lambda: "1.0.0")
     monkeypatch.setattr(update_check, "get_version", lambda: "1.0.0")
     assert update_check.self_update() is True
+
+
+def test_sha256_file(tmp_path: Path) -> None:
+    path = tmp_path / "blob"
+    path.write_bytes(b"strix")
+    assert update_check._sha256_file(path) == hashlib.sha256(b"strix").hexdigest()
 
 
 def test_release_target(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -9,6 +9,7 @@ path for the standalone binary install.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -112,6 +113,32 @@ def _fetch_latest_version() -> str | None:
     except Exception:  # noqa: BLE001
         logger.debug("update check failed", exc_info=True)
         return None
+
+
+def _fetch_asset_digest(version: str, filename: str) -> str | None:
+    """Return the expected sha256 (hex) for a release asset, if the API provides one."""
+    try:
+        response = requests.get(
+            f"https://api.github.com/repos/{GITHUB_REPO}/releases/tags/v{version}",
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        for asset in response.json().get("assets", []):
+            if asset.get("name") == filename:
+                digest = asset.get("digest") or ""
+                if digest.startswith("sha256:"):
+                    return digest.removeprefix("sha256:")
+    except Exception:  # noqa: BLE001
+        logger.debug("release asset digest lookup failed", exc_info=True)
+    return None
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _read_cache() -> dict[str, object]:
@@ -237,6 +264,17 @@ def _download_and_replace(version: str, target: str, console: Console) -> bool:
                 for chunk in response.iter_content(chunk_size=1 << 20):
                     f.write(chunk)
 
+        expected_digest = _fetch_asset_digest(version, filename)
+        if expected_digest:
+            actual_digest = _sha256_file(archive_path)
+            if actual_digest != expected_digest:
+                raise RuntimeError(
+                    f"checksum mismatch for {filename}: "
+                    f"expected sha256 {expected_digest}, got {actual_digest}"
+                )
+        else:
+            console.print("[dim yellow]No published checksum available; skipping verification[/]")
+
         if is_windows:
             with zipfile.ZipFile(archive_path) as zf:
                 zf.extract(binary_name, tmp_dir)
@@ -248,13 +286,23 @@ def _download_and_replace(version: str, target: str, console: Console) -> bool:
         new_binary.chmod(new_binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
 
         staged = current_exe.with_name(current_exe.name + ".new")
-        shutil.copy2(new_binary, staged)
-        if is_windows:
-            # Windows can't replace a running executable in place; move it aside first.
-            old = current_exe.with_name(current_exe.name + ".old")
-            old.unlink(missing_ok=True)
-            current_exe.rename(old)
-        staged.replace(current_exe)
+        try:
+            shutil.copy2(new_binary, staged)
+            if is_windows:
+                # Windows can't replace a running executable in place; move it aside first.
+                old = current_exe.with_name(current_exe.name + ".old")
+                old.unlink(missing_ok=True)
+                current_exe.rename(old)
+                try:
+                    staged.replace(current_exe)
+                except Exception:
+                    old.rename(current_exe)
+                    raise
+            else:
+                staged.replace(current_exe)
+        except Exception:
+            staged.unlink(missing_ok=True)
+            raise
     return True
 
 
