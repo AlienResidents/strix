@@ -872,8 +872,10 @@ def main() -> None:
         apply_config_override(validate_config_file(args.config))
 
     start_background_check()
-    if prompt_update_if_available(Console()) and is_binary_install() and sys.platform != "win32":
-        os.execv(sys.executable, sys.argv)  # noqa: S606  # nosec B606
+    if prompt_update_if_available(Console()):
+        if is_binary_install() and sys.platform != "win32":
+            os.execv(sys.executable, sys.argv)  # noqa: S606  # nosec B606
+        sys.exit(0)
 
     check_docker_installed()
     pull_docker_image()

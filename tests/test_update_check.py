@@ -105,6 +105,33 @@ def test_background_check_runs_when_stale(monkeypatch: pytest.MonkeyPatch) -> No
     assert cache["latest_version"] == "1.2.3"
 
 
+def test_skipped_version_suppresses_update(monkeypatch: pytest.MonkeyPatch) -> None:
+    update_check._CACHE_PATH.write_text(
+        json.dumps({"latest_version": "9.9.9", "checked_at": time.time()})
+    )
+    monkeypatch.setattr(update_check, "get_version", lambda: "1.0.0")
+    update_check.skip_version("9.9.9")
+    assert update_check.get_available_update() is None
+    assert update_check.get_available_update(respect_skip=False) == "9.9.9"
+
+
+def test_newer_release_overrides_skipped_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    update_check._CACHE_PATH.write_text(
+        json.dumps(
+            {"latest_version": "9.9.10", "checked_at": time.time(), "skipped_version": "9.9.9"}
+        )
+    )
+    monkeypatch.setattr(update_check, "get_version", lambda: "1.0.0")
+    assert update_check.get_available_update() == "9.9.10"
+
+
+def test_write_cache_preserves_existing_fields() -> None:
+    update_check.skip_version("9.9.9")
+    update_check._write_cache(latest_version="1.2.3", checked_at=123.0)
+    cache = json.loads(update_check._CACHE_PATH.read_text())
+    assert cache == {"latest_version": "1.2.3", "checked_at": 123.0, "skipped_version": "9.9.9"}
+
+
 def test_get_upgrade_command_all_methods() -> None:
     assert update_check.get_upgrade_command("binary") == "strix --update"
     assert update_check.get_upgrade_command("pipx") == "pipx upgrade strix-agent"
