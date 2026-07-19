@@ -5,6 +5,7 @@ Strix Agent Interface
 
 import argparse
 import asyncio
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -32,6 +33,13 @@ from strix.config.models import (
 from strix.core.paths import run_dir_for, runtime_state_dir
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
+from strix.interface.update_check import (
+    is_binary_install,
+    notify_update,
+    prompt_update_if_available,
+    self_update,
+    start_background_check,
+)
 from strix.interface.utils import (
     assign_workspace_subdirs,
     build_final_stats_text,
@@ -448,6 +456,14 @@ Examples:
     )
 
     parser.add_argument(
+        "--update",
+        action="store_true",
+        help="Update strix to the latest version and exit. Self-updates the "
+        "standalone binary install; for pip/pipx/uv installs, prints the "
+        "matching upgrade command instead.",
+    )
+
+    parser.add_argument(
         "-t",
         "--target",
         type=str,
@@ -564,6 +580,9 @@ Examples:
     )
 
     args = parser.parse_args()
+
+    if args.update:
+        sys.exit(0 if self_update() else 1)
 
     if args.instruction and args.instruction_file:
         parser.error(
@@ -788,6 +807,7 @@ def display_completion_message(args: argparse.Namespace, results_path: Path) -> 
         "[#60a5fa]discord.gg/strix-ai[/]"
     )
     console.print()
+    notify_update(console)
 
 
 def pull_docker_image() -> None:
@@ -850,6 +870,10 @@ def main() -> None:
 
     if args.config:
         apply_config_override(validate_config_file(args.config))
+
+    start_background_check()
+    if prompt_update_if_available(Console()) and is_binary_install() and sys.platform != "win32":
+        os.execv(sys.executable, sys.argv)  # noqa: S606  # nosec B606
 
     check_docker_installed()
     pull_docker_image()

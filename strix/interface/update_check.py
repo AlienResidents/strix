@@ -1,0 +1,308 @@
+"""Update notifications and self-update for the strix CLI.
+
+Follows the pattern used by tools like gh, uv, and pip: a background,
+rate-limited (once per 24h) check against the release source, a cached
+result in ``~/.strix``, a non-intrusive notice with the upgrade command
+for the detected install method, and a ``strix --update`` self-update
+path for the standalone binary install.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import platform
+import shutil
+import stat
+import sys
+import tarfile
+import tempfile
+import threading
+import time
+import zipfile
+from pathlib import Path
+from typing import cast
+
+import requests
+from rich.console import Console
+from rich.prompt import Confirm
+
+from strix.telemetry._common import get_version
+
+
+logger = logging.getLogger(__name__)
+
+GITHUB_REPO = "usestrix/strix"
+PYPI_PACKAGE = "strix-agent"
+CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+REQUEST_TIMEOUT_SECONDS = 5
+
+_CACHE_PATH = Path.home() / ".strix" / "update-check.json"
+
+_background_thread: threading.Thread | None = None
+
+
+def _is_disabled() -> bool:
+    return bool(os.environ.get("STRIX_NO_UPDATE_CHECK")) or any(
+        os.environ.get(key)
+        for key in ("CI", "GITHUB_ACTIONS", "GITLAB_CI", "JENKINS_URL", "BUILDKITE", "CIRCLECI")
+    )
+
+
+def is_binary_install() -> bool:
+    return bool(getattr(sys, "frozen", False))
+
+
+def get_install_method() -> str:
+    if is_binary_install():
+        return "binary"
+    prefix = str(Path(sys.prefix)).replace("\\", "/")
+    if "/pipx/" in prefix or prefix.endswith("/pipx"):
+        return "pipx"
+    if "/uv/tools/" in prefix:
+        return "uv"
+    return "pip"
+
+
+def get_upgrade_command(method: str | None = None) -> str:
+    method = method or get_install_method()
+    commands = {
+        "binary": "strix --update",
+        "pipx": "pipx upgrade strix-agent",
+        "uv": "uv tool upgrade strix-agent",
+        "pip": "pip install --upgrade strix-agent",
+    }
+    return commands[method]
+
+
+def _parse_version(value: str) -> tuple[int, ...] | None:
+    parts = value.strip().lstrip("v").split(".")
+    try:
+        return tuple(int(part) for part in parts)
+    except ValueError:
+        return None
+
+
+def _is_newer(latest: str, current: str) -> bool:
+    latest_parts = _parse_version(latest)
+    current_parts = _parse_version(current)
+    if latest_parts is None or current_parts is None:
+        return False
+    return latest_parts > current_parts
+
+
+def _fetch_latest_version() -> str | None:
+    try:
+        if is_binary_install():
+            response = requests.get(
+                f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest",
+                timeout=REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            tag = response.json().get("tag_name", "")
+            return tag.lstrip("v") or None
+        response = requests.get(
+            f"https://pypi.org/pypi/{PYPI_PACKAGE}/json",
+            timeout=REQUEST_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        version = response.json().get("info", {}).get("version")
+        return str(version) if version else None
+    except Exception:  # noqa: BLE001
+        logger.debug("update check failed", exc_info=True)
+        return None
+
+
+def _read_cache() -> dict[str, object]:
+    try:
+        with _CACHE_PATH.open(encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return cast("dict[str, object]", data)
+    except Exception:  # noqa: BLE001, S110
+        pass  # nosec B110
+    return {}
+
+
+def _write_cache(latest_version: str) -> None:
+    try:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        _CACHE_PATH.write_text(
+            json.dumps({"latest_version": latest_version, "checked_at": time.time()}),
+            encoding="utf-8",
+        )
+    except Exception:  # noqa: BLE001, S110
+        pass  # nosec B110
+
+
+def _refresh_cache() -> None:
+    latest = _fetch_latest_version()
+    if latest:
+        _write_cache(latest)
+
+
+def start_background_check() -> None:
+    """Refresh the cached latest-version info in a daemon thread (at most once per 24h)."""
+    global _background_thread  # noqa: PLW0603
+    if _is_disabled():
+        return
+    cache = _read_cache()
+    checked_at = cache.get("checked_at")
+    if isinstance(checked_at, int | float) and time.time() - checked_at < CHECK_INTERVAL_SECONDS:
+        return
+    _background_thread = threading.Thread(target=_refresh_cache, daemon=True)
+    _background_thread.start()
+
+
+def get_available_update() -> str | None:
+    """Return the newer version from the cache, or None if up to date / unknown."""
+    if _is_disabled():
+        return None
+    if _background_thread is not None:
+        _background_thread.join(timeout=0.2)
+    latest = _read_cache().get("latest_version")
+    current = get_version()
+    if isinstance(latest, str) and current != "unknown" and _is_newer(latest, current):
+        return latest
+    return None
+
+
+def notify_update(console: Console) -> None:
+    latest = get_available_update()
+    if not latest:
+        return
+    console.print(
+        f"[#eab308]A new version of strix is available:[/] "
+        f"[dim]{get_version()}[/] [dim]→[/] [bold #22c55e]{latest}[/]"
+        f"  [dim]·[/]  [#60a5fa]{get_upgrade_command()}[/]"
+    )
+    console.print()
+
+
+def prompt_update_if_available(console: Console) -> bool:
+    """Offer an interactive self-update before a scan starts.
+
+    Returns True if the binary was updated (caller should re-exec).
+    """
+    latest = get_available_update()
+    if not latest or not sys.stdin.isatty() or not sys.stdout.isatty():
+        return False
+    console.print()
+    console.print(
+        f"[#eab308]A new version of strix is available:[/] "
+        f"[dim]{get_version()}[/] [dim]→[/] [bold #22c55e]{latest}[/]"
+    )
+    if not is_binary_install():
+        console.print(f"[dim]Upgrade with:[/] [#60a5fa]{get_upgrade_command()}[/]")
+        console.print()
+        return False
+    if not Confirm.ask("Update now?", default=False):
+        console.print()
+        return False
+    return self_update(console, version=latest)
+
+
+def _release_target() -> str | None:
+    raw_os = platform.system().lower()
+    os_name = {"darwin": "macos", "linux": "linux", "windows": "windows"}.get(raw_os)
+    arch = platform.machine().lower()
+    arch = {"aarch64": "arm64", "amd64": "x86_64"}.get(arch, arch)
+    if os_name is None:
+        return None
+    target = f"{os_name}-{arch}"
+    supported = {"linux-x86_64", "macos-x86_64", "macos-arm64", "windows-x86_64"}
+    return target if target in supported else None
+
+
+def _download_and_replace(version: str, target: str, console: Console) -> bool:
+    is_windows = target.startswith("windows")
+    archive_ext = ".zip" if is_windows else ".tar.gz"
+    filename = f"strix-{version}-{target}{archive_ext}"
+    url = f"https://github.com/{GITHUB_REPO}/releases/download/v{version}/{filename}"
+    binary_name = f"strix-{version}-{target}" + (".exe" if is_windows else "")
+    current_exe = Path(sys.executable).resolve()
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_dir = Path(tmp)
+        archive_path = tmp_dir / filename
+        console.print(f"[dim]Downloading[/] {url}")
+        with requests.get(  # nosec B113
+            url,
+            stream=True,
+            timeout=REQUEST_TIMEOUT_SECONDS * 12,
+        ) as response:
+            response.raise_for_status()
+            with archive_path.open("wb") as f:
+                for chunk in response.iter_content(chunk_size=1 << 20):
+                    f.write(chunk)
+
+        if is_windows:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extract(binary_name, tmp_dir)
+        else:
+            with tarfile.open(archive_path, "r:gz") as tf:
+                tf.extract(binary_name, tmp_dir, filter="data")
+
+        new_binary = tmp_dir / binary_name
+        new_binary.chmod(new_binary.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+        staged = current_exe.with_name(current_exe.name + ".new")
+        shutil.copy2(new_binary, staged)
+        if is_windows:
+            # Windows can't replace a running executable in place; move it aside first.
+            old = current_exe.with_name(current_exe.name + ".old")
+            old.unlink(missing_ok=True)
+            current_exe.rename(old)
+        staged.replace(current_exe)
+    return True
+
+
+def self_update(console: Console | None = None, version: str | None = None) -> bool:
+    """Replace the running standalone binary with the latest release.
+
+    Returns True on success. For package-manager installs this only
+    prints the right upgrade command and returns False.
+    """
+    console = console or Console()
+
+    if not is_binary_install():
+        method = get_install_method()
+        console.print(
+            f"[#eab308]This strix was installed via {method};[/] "
+            f"upgrade it with: [#60a5fa]{get_upgrade_command(method)}[/]"
+        )
+        return False
+
+    latest = version or _fetch_latest_version()
+    if not latest:
+        console.print("[bold red]Could not determine the latest strix version.[/]")
+        return False
+
+    current = get_version()
+    if current != "unknown" and not _is_newer(latest, current):
+        console.print(f"[#22c55e]strix {current} is already the latest version.[/]")
+        return True
+
+    target = _release_target()
+    if not target:
+        console.print(
+            f"[bold red]No prebuilt binary for this platform "
+            f"({platform.system()}/{platform.machine()}).[/]"
+        )
+        return False
+
+    try:
+        _download_and_replace(latest, target, console)
+    except Exception as e:  # noqa: BLE001
+        logger.debug("self-update failed", exc_info=True)
+        console.print(f"[bold red]Update failed:[/] {e}")
+        console.print(
+            "[dim]You can reinstall manually with:[/] "
+            "[#60a5fa]curl -sSL https://strix.ai/install | bash[/]"
+        )
+        return False
+
+    _write_cache(latest)
+    console.print(f"[#22c55e]✓ Updated strix to {latest}[/]")
+    return True
