@@ -23,13 +23,17 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
+from strix.core.paths import run_record_path
+from strix.viewer import auth
 from strix.viewer.transcript import (
     build_run_state,
+    primary_target,
     read_report_markdown,
     read_run_summary,
     read_vulnerabilities,
+    severity_counts,
 )
 
 
@@ -45,10 +49,66 @@ def bundle_is_built() -> bool:
     return (bundle_dir() / "index.html").is_file()
 
 
+def _iter_run_dirs(base_dir: Path) -> list[Path]:
+    """Every run directory under ``base_dir``, newest first by record mtime."""
+    if not base_dir.is_dir():
+        return []
+    run_dirs = [child for child in base_dir.iterdir() if run_record_path(child).is_file()]
+    run_dirs.sort(key=lambda child: run_record_path(child).stat().st_mtime, reverse=True)
+    return run_dirs
+
+
+def run_list_entry(run_dir: Path) -> dict[str, Any]:
+    """Compact summary of a single run for the history list."""
+    record = read_run_summary(run_dir)
+    return {
+        "name": record.get("run_name") or run_dir.name,
+        "target": primary_target(record),
+        "scan_mode": record.get("scan_mode"),
+        "status": record.get("status"),
+        "start_time": record.get("start_time"),
+        "end_time": record.get("end_time"),
+        "finished": bool(record.get("finished")),
+        "severity_counts": severity_counts(read_vulnerabilities(run_dir)),
+    }
+
+
+def build_runs_payload(base_dir: Path, *, verified: bool) -> dict[str, Any]:
+    """The /api/runs payload. Gates the run list behind email verification.
+
+    The count is always advertised so the UI can tease the history, but the
+    entries only appear once the viewer is verified.
+    """
+    run_dirs = _iter_run_dirs(base_dir)
+    count = len(run_dirs)
+    if not verified:
+        return {"locked": True, "count": count, "runs": []}
+    return {"locked": False, "count": count, "runs": [run_list_entry(d) for d in run_dirs]}
+
+
+def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path) -> Path | None:
+    """Resolve a ``?run=`` value to a real run directory under ``base_dir``.
+
+    Returns ``default_run_dir`` when no run is requested. Rejects traversal and
+    unknown runs (returns None) so the caller can answer 404.
+    """
+    if not run_param:
+        return default_run_dir
+    base = base_dir.resolve()
+    candidate = (base / run_param).resolve()
+    # Only direct children of the runs base that actually hold a run record.
+    if candidate.parent != base or not run_record_path(candidate).is_file():
+        return None
+    return candidate
+
+
 class _ViewerState:
     def __init__(self, run_dir: Path, assets_dir: Path) -> None:
         self.run_dir = run_dir
         self.assets_dir = assets_dir
+        # The strix_runs directory that holds the launched run; used to
+        # enumerate and resolve other runs for the history list.
+        self.base_dir = run_dir.parent
 
 
 def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
@@ -59,10 +119,11 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             logger.debug("viewer %s - %s", self.address_string(), format % args)
 
         def do_GET(self) -> None:
-            path = urlsplit(self.path).path
+            parts = urlsplit(self.path)
+            path = parts.path
             try:
                 if path.startswith("/api/"):
-                    self._handle_api(path)
+                    self._handle_api(path, parse_qs(parts.query))
                 else:
                     self._handle_static(path)
             except BrokenPipeError:
@@ -79,6 +140,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             try:
                 if path == "/api/event":
                     self._handle_event()
+                elif path == "/api/auth/otp/start":
+                    self._handle_otp_start()
+                elif path == "/api/auth/otp/verify":
+                    self._handle_otp_verify()
+                elif path == "/api/auth/forget":
+                    self._handle_forget()
+                elif path == "/api/report/send":
+                    self._handle_report_send()
                 else:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
@@ -88,16 +157,20 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 logger.exception("viewer request failed: POST %s", path)
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": "internal error"})
 
-        def _handle_event(self) -> None:
+        def _read_body(self) -> dict[str, Any]:
             length = int(self.headers.get("Content-Length") or 0)
             raw = self.rfile.read(length) if length else b""
             try:
                 body = json.loads(raw or b"{}")
             except json.JSONDecodeError:
-                body = {}
+                return {}
+            return body if isinstance(body, dict) else {}
+
+        def _handle_event(self) -> None:
+            body = self._read_body()
             # Only the viewer's own sign-up/upsell CTA click is forwarded, as an
             # anonymous PostHog event that respects the global telemetry opt-out.
-            if isinstance(body, dict) and body.get("event") == "cta_clicked":
+            if body.get("event") == "cta_clicked":
                 cta = str(body.get("cta") or "unknown")
                 from strix.telemetry import posthog  # noqa: PLC0415
 
@@ -105,8 +178,31 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
 
-        def _handle_api(self, path: str) -> None:
-            run_dir = state.run_dir
+        def _handle_api(self, path: str, query: dict[str, list[str]]) -> None:
+            # The launched run is always viewable with no verification. Only the
+            # cross-run history list (/api/runs) is gated.
+            if path == "/api/runs":
+                payload = build_runs_payload(state.base_dir, verified=auth.is_verified())
+                self._send_json(HTTPStatus.OK, payload)
+                return
+            if path == "/api/auth/status":
+                record = auth.read_auth()
+                self._send_json(
+                    HTTPStatus.OK,
+                    {
+                        "verified": record is not None,
+                        "email": record.get("email") if record else None,
+                    },
+                )
+                return
+
+            run_values = query.get("run")
+            run_param = run_values[0] if run_values else None
+            run_dir = resolve_run_dir(state.base_dir, run_param, state.run_dir)
+            if run_dir is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
+                return
+
             if path == "/api/run":
                 self._send_json(HTTPStatus.OK, read_run_summary(run_dir))
             elif path == "/api/vulnerabilities":
@@ -117,6 +213,85 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.OK, build_run_state(run_dir))
             else:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
+
+        def _handle_otp_start(self) -> None:
+            email = str(self._read_body().get("email") or "").strip()
+            if not email:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_email"})
+                return
+            try:
+                auth.otp_start(email)
+            except auth.RelayError as exc:
+                self._send_relay_error(exc)
+                return
+            self._send_json(HTTPStatus.OK, {"ok": True})
+
+        def _handle_otp_verify(self) -> None:
+            body = self._read_body()
+            email = str(body.get("email") or "").strip()
+            code = str(body.get("code") or "").strip()
+            if not email or not code:
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_code"})
+                return
+            try:
+                result = auth.otp_verify(email, code)
+            except auth.RelayError as exc:
+                self._send_relay_error(exc)
+                return
+            auth.write_auth(
+                email=result.get("email") or email,
+                token=result["token"],
+                verified_at=result.get("expires_at") or "",
+            )
+            verified_email = result.get("email") or email
+            self._send_json(HTTPStatus.OK, {"verified": True, "email": verified_email})
+
+        def _handle_forget(self) -> None:
+            auth.forget()
+            self._send_json(HTTPStatus.OK, {"ok": True})
+
+        def _handle_report_send(self) -> None:
+            record = auth.read_auth()
+            if record is None:
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
+                return
+            run_param = str(self._read_body().get("run") or "") or None
+            run_dir = resolve_run_dir(state.base_dir, run_param, state.run_dir)
+            if run_dir is None:
+                self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
+                return
+
+            from strix.viewer.report_pdf import build_encrypted_report  # noqa: PLC0415
+
+            pdf_bytes, password, filename = build_encrypted_report(run_dir)
+            summary = read_run_summary(run_dir)
+            run_name = str(summary.get("run_name") or run_dir.name)
+            target = primary_target(summary) or "unknown target"
+            try:
+                # The password is intentionally NOT passed here; only the
+                # encrypted PDF bytes reach the relay.
+                auth.report_send(record["token"], pdf_bytes, filename, run_name, target)
+            except auth.RelayError as exc:
+                self._send_relay_error(exc)
+                return
+            # The password is returned only to the local (127.0.0.1) browser.
+            self._send_json(
+                HTTPStatus.OK,
+                {"ok": True, "password": password, "filename": filename},
+            )
+
+        def _send_relay_error(self, exc: auth.RelayError) -> None:
+            status_by_code = {
+                "rate_limited": HTTPStatus.TOO_MANY_REQUESTS,
+                "invalid_email": HTTPStatus.BAD_REQUEST,
+                "invalid_code": HTTPStatus.FORBIDDEN,
+                "reverify": HTTPStatus.UNAUTHORIZED,
+                "forbidden": HTTPStatus.FORBIDDEN,
+                "too_large": HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                "unavailable": HTTPStatus.BAD_GATEWAY,
+            }
+            status = status_by_code.get(exc.code, HTTPStatus.BAD_GATEWAY)
+            self._send_json(status, {"error": exc.code})
 
         def _handle_static(self, path: str) -> None:
             target = self._resolve_asset(path)
