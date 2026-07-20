@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Mail, ShieldCheck, Lock, Copy, Check, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import {
   otpStart,
@@ -21,6 +21,12 @@ interface EmailReportViewProps {
   activeRun: string | null;
   auth: AuthStatus | null;
   purpose: "report" | "verify";
+  /**
+   * Skip the report disclosure and start the flow directly (used by the
+   * Overview CTA, which already states the tradeoff). Unverified users land on
+   * the email step; already-verified users send immediately.
+   */
+  skipDisclosure?: boolean;
   /** Refresh auth + runs after a successful verify (lifts state to App). */
   onAuthChanged: () => void;
   /** Leave this page (report "Done" -> overview; verify success -> history). */
@@ -52,13 +58,19 @@ export default function EmailReportView({
   activeRun,
   auth,
   purpose,
+  skipDisclosure = false,
   onAuthChanged,
   onExit,
 }: EmailReportViewProps) {
   const verified = auth?.verified === true;
   const verifyOnly = purpose === "verify";
-  // Verify mode skips the report disclosure and goes straight to the email step.
-  const [step, setStep] = useState<Step>(verifyOnly ? "email" : "disclosure");
+  // Verify mode (and the Overview CTA, which skips the disclosure) start on the
+  // email step; a verified user who skips the disclosure sends immediately.
+  const [step, setStep] = useState<Step>(() => {
+    if (verifyOnly) return "email";
+    if (skipDisclosure) return verified ? "sending" : "email";
+    return "disclosure";
+  });
   const [email, setEmail] = useState(auth?.email ?? "");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +80,7 @@ export default function EmailReportView({
   const [filename, setFilename] = useState("");
   const [copied, setCopied] = useState(false);
   const [sentTo, setSentTo] = useState("");
+  const autoSentRef = useRef(false);
 
   const doSend = async () => {
     setStep("sending");
@@ -94,6 +107,16 @@ export default function EmailReportView({
     if (verified) void doSend();
     else setStep("email");
   };
+
+  // A verified user who skipped the disclosure (Overview CTA) sends on arrival.
+  useEffect(() => {
+    if (!verifyOnly && skipDisclosure && verified && !autoSentRef.current) {
+      autoSentRef.current = true;
+      void doSend();
+    }
+    // Run once on mount; the page remounts fresh each time it is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submitEmail = async () => {
     const value = email.trim();

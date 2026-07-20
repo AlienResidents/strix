@@ -76,6 +76,7 @@ export default function App() {
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [runs, setRuns] = useState<RunsPayload | null>(null);
   const [emailPurpose, setEmailPurpose] = useState<"report" | "verify">("report");
+  const [emailSkipDisclosure, setEmailSkipDisclosure] = useState(false);
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -182,15 +183,22 @@ export default function App() {
     setView("overview");
   }, []);
 
-  const openEmail = useCallback(() => {
+  const goEmail = useCallback((skipDisclosure: boolean) => {
     trackCta("email_report");
     setEmailPurpose("report");
+    setEmailSkipDisclosure(skipDisclosure);
     setView("email");
   }, []);
+
+  // Sidebar entry keeps the disclosure (first place those users see it);
+  const openEmail = useCallback(() => goEmail(false), [goEmail]);
+  // the Overview CTA already states the tradeoff, so it starts the flow directly.
+  const openEmailFromOverview = useCallback(() => goEmail(true), [goEmail]);
 
   const openVerify = useCallback(() => {
     trackCta("history_unlock");
     setEmailPurpose("verify");
+    setEmailSkipDisclosure(false);
     setView("email");
   }, []);
 
@@ -292,6 +300,7 @@ export default function App() {
               activeRun={activeRun}
               auth={auth}
               purpose={emailPurpose}
+              skipDisclosure={emailSkipDisclosure}
               onAuthChanged={() => {
                 void refreshAuth();
                 void refreshRuns();
@@ -343,7 +352,7 @@ export default function App() {
                   counts={counts}
                   total={run.vulnerabilities.length}
                   reportMarkdown={run.reportMarkdown}
-                  onOpenEmail={openEmail}
+                  onOpenEmail={openEmailFromOverview}
                 />
               ) : view === "agents" && agentCount > 0 ? (
                 <AgentsTab run={run} />
