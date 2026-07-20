@@ -402,11 +402,11 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
 
         def _handle_static(self, path: str) -> None:
             target = self._resolve_asset(path)
-            is_index = target is None
             if target is None:
                 # SPA fallback: unknown non-asset routes render index.html so
                 # client-side deep links work.
                 target = state.assets_dir / "index.html"
+            is_index = target.name == "index.html"
             if not target.is_file():
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
