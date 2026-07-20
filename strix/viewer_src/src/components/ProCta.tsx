@@ -1,6 +1,7 @@
 import React, { useState } from "react";
 import { ArrowUpRight } from "lucide-react";
 import { SIGNUP_URL, trackCta } from "@/lib/cta";
+import type { ProFeature } from "@/lib/pro-features";
 
 /**
  * Shared Pro CTA primitives. Every Pro item is a direct link-out to the cloud
@@ -9,14 +10,14 @@ import { SIGNUP_URL, trackCta } from "@/lib/cta";
  * row, and the inline CTAs in the tabs.
  */
 
-/** Small "Pro" pill. Deliberately not a padlock. */
-export function ProTag({ className = "" }: { className?: string }) {
+/** Small tier pill ("Pro" or "Enterprise"). Deliberately not a padlock. */
+export function ProTag({ label = "Pro", className = "" }: { label?: string; className?: string }) {
   return (
     <span
       className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#aaa] ${className}`}
       style={{ border: "1px solid #2a2a2a", background: "rgba(255,255,255,0.04)" }}
     >
-      Pro
+      {label}
     </span>
   );
 }
@@ -93,31 +94,40 @@ export function ProTile({ item }: { item: ProItem }) {
 }
 
 /**
- * Sidebar-row Pro item: icon + label + Pro tag, with the one-liner shown as
- * always-visible secondary text under the title. Link-out to sign-up in a new
- * tab.
+ * Sidebar-row Pro item: a two-line row (icon + label + short one-liner
+ * underneath) with a small right-aligned tier tag. Opens the in-app
+ * FeatureDetail view via onClick (no link-out) so it sits uniformly beside the
+ * run/local rows in the themed nav list.
  */
-export function ProNavItem({ item }: { item: ProItem }) {
-  const Icon = item.icon;
+export function ProNavItem({
+  feature,
+  active,
+  onClick,
+}: {
+  feature: ProFeature;
+  active?: boolean;
+  onClick: () => void;
+}) {
+  const Icon = feature.icon;
   return (
-    <a
-      href={SIGNUP_URL}
-      target="_blank"
-      rel="noopener noreferrer"
-      onClick={() => trackCta(item.slug)}
-      className="group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+    <button
+      onClick={onClick}
+      className={`group flex w-full cursor-pointer items-start gap-2.5 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+        active
+          ? "text-white"
+          : "text-[#888] hover:bg-[rgba(255,255,255,0.06)] hover:text-white"
+      }`}
+      style={active ? { background: "rgba(255,255,255,0.12)" } : undefined}
     >
-      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#666] transition-colors group-hover:text-[#aaa]" aria-hidden="true" />
+      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0" aria-hidden="true" />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-1.5">
-          <span className="flex-1 truncate text-sm text-[#aaa] transition-colors group-hover:text-white">
-            {item.title}
-          </span>
-          <ProTag />
+          <span className="flex-1 truncate text-sm">{feature.title}</span>
+          <ProTag label={feature.tier} />
         </span>
-        <span className="mt-0.5 block text-[11px] leading-snug text-[#666]">{item.desc}</span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-[#666]">{feature.navDesc}</span>
       </span>
-    </a>
+    </button>
   );
 }
 

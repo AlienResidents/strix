@@ -42,9 +42,11 @@ import { SIGNUP_URL, trackCta } from "@/lib/cta";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
 import EmailReportDialog from "@/components/EmailReportDialog";
+import FeatureDetail from "@/components/FeatureDetail";
 import { ProTile, ProInlineCta, type ProItem } from "@/components/ProCta";
+import { FEATURES } from "@/lib/pro-features";
 
-export type View = "overview" | "issues" | "agents" | "history";
+export type View = "overview" | "issues" | "agents" | "history" | "feature";
 
 const TRUST_BANNER =
   "Your findings stay on your machine. They're rendered here locally in your browser and never uploaded or stored by Strix. Emailing a report is an explicit opt-in that sends an encrypted copy only you can open.";
@@ -70,9 +72,11 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [view, setView] = useState<View>("overview");
+  const [activeFeature, setActiveFeature] = useState<string | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [runs, setRuns] = useState<RunsPayload | null>(null);
   const [emailOpen, setEmailOpen] = useState(false);
+  const [emailPurpose, setEmailPurpose] = useState<"report" | "verify">("report");
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -181,14 +185,26 @@ export default function App() {
 
   const openEmail = useCallback(() => {
     trackCta("email_report");
+    setEmailPurpose("report");
+    setEmailOpen(true);
+  }, []);
+
+  const openVerify = useCallback(() => {
+    trackCta("history_unlock");
+    setEmailPurpose("verify");
     setEmailOpen(true);
   }, []);
 
   const openHistory = useCallback(() => {
-    trackCta("history_unlock");
     void refreshRuns();
     setView("history");
   }, [refreshRuns]);
+
+  const selectFeature = useCallback((slug: string) => {
+    trackCta(`nav_${slug}`);
+    setActiveFeature(slug);
+    setView("feature");
+  }, []);
 
   const onForget = useCallback(async () => {
     await forgetAuth();
@@ -204,6 +220,8 @@ export default function App() {
           if (v === "history") openHistory();
           else setView(v);
         }}
+        activeFeature={activeFeature}
+        onSelectFeature={selectFeature}
         issuesCount={run?.vulnerabilities.length ?? 0}
         agentCount={agentCount}
         runCount={runs?.count ?? 0}
@@ -268,7 +286,9 @@ export default function App() {
             </div>
           )}
 
-          {view === "history" ? (
+          {view === "feature" && activeFeature && FEATURES[activeFeature] ? (
+            <FeatureDetail feature={FEATURES[activeFeature]} />
+          ) : view === "history" ? (
             <div className="space-y-4">
               <div className="flex items-center gap-2">
                 <History className="w-5 h-5 text-[#888]" aria-hidden="true" />
@@ -278,7 +298,7 @@ export default function App() {
                 runs={runs}
                 activeRun={activeRun}
                 onSelectRun={selectRun}
-                onVerifyClick={openEmail}
+                onVerifyClick={openVerify}
               />
             </div>
           ) : !run && !error ? (
@@ -342,6 +362,7 @@ export default function App() {
         onClose={() => setEmailOpen(false)}
         activeRun={activeRun}
         auth={auth}
+        purpose={emailPurpose}
         onVerified={() => {
           void refreshAuth();
           void refreshRuns();

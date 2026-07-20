@@ -9,11 +9,19 @@ import {
 
 type Step = "disclosure" | "email" | "code" | "sending" | "password";
 
+/**
+ * "report" runs the full disclosure -> verify -> encrypted send flow.
+ * "verify" is a verify-only flow (view past runs): it starts at the email step
+ * and finishes as soon as the code is confirmed, without sending a report.
+ */
+type Purpose = "report" | "verify";
+
 interface EmailReportDialogProps {
   open: boolean;
   onClose: () => void;
   activeRun: string | null;
   auth: AuthStatus | null;
+  purpose: Purpose;
   /** Re-fetch auth status after a successful verify (lifts state to App). */
   onVerified: () => void;
 }
@@ -21,8 +29,33 @@ interface EmailReportDialogProps {
 const OTP_START_ERRORS: Record<string, string> = {
   rate_limited: "Too many requests. Wait a minute and try again.",
   invalid_email: "That email does not look right. Check it and try again.",
+  work_email_required: "Please use your work email, not a personal one.",
   unavailable: "The email service is unavailable right now. Try again shortly.",
 };
+
+// Small common set for instant UX only; the relay is authoritative on the full
+// free/personal domain list.
+const COMMON_FREE_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "yahoo.com",
+  "ymail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "icloud.com",
+  "me.com",
+  "aol.com",
+  "proton.me",
+  "protonmail.com",
+  "gmx.com",
+  "mail.com",
+]);
+
+function isCommonFreeEmail(email: string): boolean {
+  const domain = email.split("@")[1]?.trim().toLowerCase();
+  return domain != null && COMMON_FREE_DOMAINS.has(domain);
+}
 
 const SEND_ERRORS: Record<string, string> = {
   forbidden: "This email was unsubscribed from Strix, so we cannot send to it.",
@@ -35,6 +68,7 @@ export default function EmailReportDialog({
   onClose,
   activeRun,
   auth,
+  purpose,
   onVerified,
 }: EmailReportDialogProps) {
   const verified = auth?.verified === true;
@@ -49,11 +83,12 @@ export default function EmailReportDialog({
   const [copied, setCopied] = useState(false);
   const sentTo = useRef<string>("");
 
-  // Reset to the disclosure step each time the dialog opens; prefill the email
-  // when already verified so the flow can skip straight to sending.
+  // Reset each time the dialog opens. The report flow opens on the disclosure
+  // step; the verify-only flow skips it and starts straight at the email step.
+  // Prefill the email when already verified so the flow can skip ahead.
   useEffect(() => {
     if (!open) return;
-    setStep("disclosure");
+    setStep(purpose === "verify" ? "email" : "disclosure");
     setCode("");
     setBusy(false);
     setError(null);
@@ -62,7 +97,7 @@ export default function EmailReportDialog({
     setFilename("");
     setCopied(false);
     setEmail(auth?.email ?? "");
-  }, [open, auth?.email]);
+  }, [open, auth?.email, purpose]);
 
   // Close on Escape (but never while a password is on screen: it must not be
   // dismissed by accident).
@@ -113,6 +148,12 @@ export default function EmailReportDialog({
       setError("Enter your email to continue.");
       return;
     }
+    // Snappy client-side guard for the obvious personal domains; the relay is
+    // still authoritative on the full list.
+    if (isCommonFreeEmail(value)) {
+      setError(OTP_START_ERRORS.work_email_required);
+      return;
+    }
     setBusy(true);
     setError(null);
     const result = await otpStart(value);
@@ -138,6 +179,11 @@ export default function EmailReportDialog({
     if (result.verified) {
       sentTo.current = result.email;
       onVerified();
+      // Verify-only flow (viewing past runs) stops here; no report is sent.
+      if (purpose === "verify") {
+        onClose();
+        return;
+      }
       void doSend();
     } else {
       setError("That code did not match. Check it and try again.");
@@ -187,8 +233,16 @@ export default function EmailReportDialog({
             <Mail className="h-4 w-4 text-emerald-400" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-base font-semibold text-white">Email an encrypted PDF report of this run</h2>
-            <p className="text-xs text-[#666]">Verified by a one-time code sent to your email</p>
+            <h2 className="text-base font-semibold text-white">
+              {purpose === "verify"
+                ? "Verify your email to view your runs"
+                : "Email an encrypted PDF report of this run"}
+            </h2>
+            <p className="text-xs text-[#666]">
+              {purpose === "verify"
+                ? "We send a one-time code to confirm it is you."
+                : "Verified by a one-time code sent to your email"}
+            </p>
           </div>
         </div>
 
@@ -255,6 +309,7 @@ export default function EmailReportDialog({
                 className="w-full rounded-lg bg-black px-3 py-2.5 text-sm text-white outline-none transition-colors focus:border-[#444]"
                 style={{ border: "1px solid #2a2a2a" }}
               />
+              <span className="mt-1.5 block text-xs text-[#666]">Use your work email.</span>
             </label>
             <button
               type="submit"
@@ -293,7 +348,7 @@ export default function EmailReportDialog({
               className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-              Verify and send
+              {purpose === "verify" ? "Verify" : "Verify and send"}
             </button>
             <button
               type="button"

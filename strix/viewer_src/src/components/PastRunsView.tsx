@@ -71,14 +71,13 @@ export default function PastRunsView({
         </div>
         <h2 className="text-base font-semibold text-white">Browse every run on this machine</h2>
         <p className="mx-auto mt-1.5 max-w-md text-sm text-[#888]">
-          You have {count} past {count === 1 ? "run" : "runs"} on this machine. Verify your
-          email to browse them here.
+          You have {count} past {count === 1 ? "run" : "runs"} on this machine.
         </p>
         <button
           onClick={onVerifyClick}
           className="mt-4 cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
         >
-          Verify email to unlock
+          View runs
         </button>
         <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-[#555]">
           <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
