@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import stat
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from strix.viewer import auth
+
+
+def _iso(delta: timedelta) -> str:
+    return (datetime.now(UTC) + delta).isoformat()
 
 
 if TYPE_CHECKING:
@@ -25,7 +30,7 @@ def test_write_read_forget_roundtrip() -> None:
     assert auth.read_auth() is None
     assert auth.is_verified() is False
 
-    auth.write_auth(email="user@example.com", token="tok-123", verified_at="2026-07-20T00:00:00Z")
+    auth.write_auth(email="user@example.com", token="tok-123", verified_at=_iso(timedelta(days=30)))
 
     record = auth.read_auth()
     assert record is not None
@@ -38,6 +43,27 @@ def test_write_read_forget_roundtrip() -> None:
     assert auth.is_verified() is False
     # Forget is a no-op when the file is already gone.
     auth.forget()
+
+
+def test_is_verified_enforces_expiry() -> None:
+    # An expired record still reads back, but no longer unlocks history.
+    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=-1)))
+    assert auth.read_auth() is not None
+    assert auth.is_verified() is False
+
+    # A future expiry unlocks it.
+    auth.write_auth(email="a@b.com", token="t", verified_at=_iso(timedelta(hours=1)))
+    assert auth.is_verified() is True
+
+
+def test_is_verified_when_expiry_absent_or_unparseable() -> None:
+    # No/blank expiry: cannot enforce locally, so treat as valid.
+    auth.write_auth(email="a@b.com", token="t", verified_at="")
+    assert auth.is_verified() is True
+
+    # Garbage expiry is ignored rather than locking the user out.
+    auth.write_auth(email="a@b.com", token="t", verified_at="not-a-date")
+    assert auth.is_verified() is True
 
 
 def test_write_auth_is_0600() -> None:

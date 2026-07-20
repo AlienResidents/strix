@@ -17,6 +17,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -57,9 +58,34 @@ def read_auth() -> dict[str, Any] | None:
     return data
 
 
+def _expiry(record: dict[str, Any]) -> datetime | None:
+    """Parse ``verified_at`` (the relay's ``expires_at``) into an aware UTC datetime.
+
+    Returns None when it is absent or unparseable, in which case expiry cannot be
+    enforced locally (the relay still rejects an expired token on report send).
+    """
+    raw = record.get("verified_at")
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
 def is_verified() -> bool:
-    """True when a usable email + token record exists locally."""
-    return read_auth() is not None
+    """True when a usable, unexpired email + token record exists locally.
+
+    The expiry returned by OTP verification is enforced here so history stops
+    unlocking once the token lapses, keeping the local gate in step with the
+    relay (which rejects an expired token on report send).
+    """
+    record = read_auth()
+    if record is None:
+        return False
+    expiry = _expiry(record)
+    return expiry is None or expiry > datetime.now(UTC)
 
 
 def write_auth(email: str, token: str, verified_at: str) -> None:

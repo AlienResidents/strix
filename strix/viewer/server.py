@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import secrets
 import threading
 import webbrowser
 from http import HTTPStatus
@@ -106,6 +107,10 @@ def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path
     return candidate
 
 
+# Name of the cookie carrying the per-process session capability.
+SESSION_COOKIE = "strix_viewer_session"
+
+
 class _ViewerState:
     def __init__(
         self,
@@ -122,6 +127,13 @@ class _ViewerState:
         # launcher), which can deliver a message to a running agent. Absent for
         # standalone ``strix view`` / finished runs, so steering is unavailable.
         self.steer_handler = steer_handler
+        # Unguessable per-process capability handed to the local browser (via a
+        # cookie on index.html) and required on the sensitive routes. It is the
+        # request-level authorization Greptile asked for: reachability of the
+        # port (e.g. when bound with ``--host``) is no longer sufficient to
+        # steer a live scan or trigger a report; only the browser that loaded
+        # the page this process served holds the token.
+        self.session_token = secrets.token_urlsafe(32)
 
 
 def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
@@ -195,20 +207,16 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             # only the whitelisted event names and their known props are passed.
             event = body.get("event")
             if event == "cta_clicked":
-                from strix.telemetry import posthog  # noqa: PLC0415
+                from strix.telemetry import posthog
 
                 cta = str(body.get("cta") or "unknown")
                 surface = body.get("surface")
-                posthog.viewer_cta_clicked(
-                    cta, surface=str(surface) if surface else None
-                )
+                posthog.viewer_cta_clicked(cta, surface=str(surface) if surface else None)
             elif event in self._EMAIL_EVENTS:
-                from strix.telemetry import posthog  # noqa: PLC0415
+                from strix.telemetry import posthog
 
                 purpose = body.get("purpose")
-                posthog.viewer_email_event(
-                    str(event), purpose=str(purpose) if purpose else None
-                )
+                posthog.viewer_email_event(str(event), purpose=str(purpose) if purpose else None)
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
 
@@ -222,9 +230,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             if path == "/api/capabilities":
                 # Steering is only possible when the viewer shares a live scan's
                 # coordinator + event loop (the TUI launcher wires a handler).
-                self._send_json(
-                    HTTPStatus.OK, {"can_steer": state.steer_handler is not None}
-                )
+                self._send_json(HTTPStatus.OK, {"can_steer": state.steer_handler is not None})
                 return
             if path == "/api/auth/status":
                 record = auth.read_auth()
@@ -242,6 +248,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             run_dir = resolve_run_dir(state.base_dir, run_param, state.run_dir)
             if run_dir is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
+                return
+
+            # The launched run is always viewable. Any *other* run's data is part
+            # of the gated history, so it requires the same email verification as
+            # the /api/runs list — otherwise knowing a run name would leak its
+            # metadata, vulnerabilities, report, and transcript.
+            if run_dir.resolve() != state.run_dir.resolve() and not auth.is_verified():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
                 return
 
             if path == "/api/run":
@@ -292,6 +306,9 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self._send_json(HTTPStatus.OK, {"ok": True})
 
         def _handle_report_send(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
             record = auth.read_auth()
             if record is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
@@ -302,7 +319,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
                 return
 
-            from strix.viewer.report_pdf import build_encrypted_report  # noqa: PLC0415
+            from strix.viewer.report_pdf import build_encrypted_report
 
             pdf_bytes, password, filename = build_encrypted_report(run_dir)
             summary = read_run_summary(run_dir)
@@ -325,6 +342,9 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
         _STEER_MESSAGE_MAX = 4000
 
         def _handle_steer(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
             body = self._read_body()
             agent_id = body.get("agent_id")
             message = body.get("message")
@@ -340,9 +360,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 return
             if state.steer_handler is None:
                 # Standalone / finished-run viewing has no live scan to steer.
-                self._send_json(
-                    HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"}
-                )
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"})
                 return
             delivered = state.steer_handler(agent_id, message)
             if delivered:
@@ -364,8 +382,27 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             status = status_by_code.get(exc.code, HTTPStatus.BAD_GATEWAY)
             self._send_json(status, {"error": exc.code})
 
+        def _cookies(self) -> dict[str, str]:
+            jar: dict[str, str] = {}
+            for chunk in (self.headers.get("Cookie") or "").split(";"):
+                name, sep, value = chunk.strip().partition("=")
+                if sep:
+                    jar[name] = value
+            return jar
+
+        def _has_session(self) -> bool:
+            """True when the request carries this process's session capability.
+
+            The cookie is set only when the SPA is served (index.html), so only
+            the browser this process handed the page to can pass. A direct
+            caller on an exposed port has no cookie and is rejected.
+            """
+            supplied = self._cookies().get(SESSION_COOKIE, "")
+            return bool(supplied) and secrets.compare_digest(supplied, state.session_token)
+
         def _handle_static(self, path: str) -> None:
             target = self._resolve_asset(path)
+            is_index = target is None
             if target is None:
                 # SPA fallback: unknown non-asset routes render index.html so
                 # client-side deep links work.
@@ -378,6 +415,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Content-Length", str(len(content)))
+            if is_index:
+                # Hand the loading browser the per-process session capability.
+                # HttpOnly (JS never needs it; fetch sends it automatically) and
+                # SameSite=Strict (never sent from a cross-site context).
+                self.send_header(
+                    "Set-Cookie",
+                    f"{SESSION_COOKIE}={state.session_token}; Path=/; HttpOnly; SameSite=Strict",
+                )
             self.end_headers()
             self.wfile.write(content)
 
