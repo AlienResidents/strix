@@ -15,6 +15,7 @@ import {
   Radio,
   ArrowUpRight,
   History,
+  Send,
 } from "lucide-react";
 import type { Vulnerability, VulnerabilitySeverity } from "@/types/issues";
 import { SEVERITY_COLORS } from "@/types/issues";
@@ -29,16 +30,19 @@ import { severityCounts, type ParsedRunSummary } from "@/lib/local-run-parser";
 import {
   fetchAll,
   fetchAuthStatus,
+  fetchCapabilities,
   fetchRunSummary,
   fetchRuns,
   fetchTranscript,
   fetchVulnerabilities,
   forgetAuth,
+  steerAgent,
   type AuthStatus,
   type LoadedRun,
   type RunsPayload,
+  type TranscriptAgent,
 } from "@/data/serverSource";
-import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, ctaUrl, track, trackCta } from "@/lib/cta";
 import { runTitle } from "@/lib/target-utils";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
@@ -78,6 +82,9 @@ export default function App() {
   const [runs, setRuns] = useState<RunsPayload | null>(null);
   const [emailPurpose, setEmailPurpose] = useState<"report" | "verify">("report");
   const [emailSkipDisclosure, setEmailSkipDisclosure] = useState(false);
+  // Whether this viewer can steer a live scan (true only inside the in-TUI
+  // launcher that shares the running scan's coordinator + event loop).
+  const [canSteer, setCanSteer] = useState(false);
 
   const refreshAuth = useCallback(async () => {
     try {
@@ -98,6 +105,12 @@ export default function App() {
   useEffect(() => {
     void refreshAuth();
     void refreshRuns();
+    // Capabilities never change over a session, so fetch once on mount.
+    fetchCapabilities()
+      .then((caps) => setCanSteer(caps.can_steer))
+      .catch(() => {
+        /* absence of steering is the safe default */
+      });
   }, [refreshAuth, refreshRuns]);
 
   // Live polling, scoped to the active run. Re-runs when the active run changes
@@ -386,7 +399,7 @@ export default function App() {
                   onOpenEmail={openEmailFromOverview}
                 />
               ) : view === "agents" && agentCount > 0 ? (
-                <AgentsTab run={run} />
+                <AgentsTab run={run} canSteer={canSteer} />
               ) : selected ? (
                 <div className="space-y-4">
                   <button
@@ -729,13 +742,16 @@ function TabButton({
   );
 }
 
-function AgentsTab({ run }: { run: LoadedRun }) {
+function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
   const { agents, events } = run.transcript;
   const graphAgents = useMemo(() => buildGraphAgents(agents, events), [agents, events]);
   // Clicking a graph node opens the agent's transcript in a modal (matching the
   // cloud app); no node selected means no modal.
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const selectedAgent = selectedId ? (agents.find((a) => a.id === selectedId) ?? null) : null;
+
+  // Live steering is only possible in-process (canSteer) while the scan runs.
+  const steerable = canSteer && !run.finished;
 
   return (
     <div className="space-y-5">
@@ -762,18 +778,16 @@ function AgentsTab({ run }: { run: LoadedRun }) {
         </div>
       </div>
 
-      {/* Steering footer: live control lives in Strix Cloud. */}
+      {/* Live steering: only in-process while the scan runs. Otherwise omitted. */}
+      {steerable && (
+        <SteerComposer agents={agents} selectedId={selectedId} />
+      )}
+
+      {/* Re-run always routes to Strix Cloud. */}
       <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
-        <p className="text-sm font-semibold text-white">Drive the agents live</p>
-        <p className="mt-0.5 text-xs text-[#666]">Steer and re-run this scan from the web.</p>
+        <p className="text-sm font-semibold text-white">Run this scan with more depth</p>
+        <p className="mt-0.5 text-xs text-[#666]">Re-run this scan on managed infra in the cloud.</p>
         <div className="mt-3 flex flex-wrap gap-2.5">
-          <ProInlineCta
-            label="Steer agents from the web"
-            desc="Guide the agents live while they scan."
-            slug="live_scan_prompt"
-            surface="agents"
-            icon={Radio}
-          />
           <ProInlineCta
             label="Re-run in Strix Cloud with more depth"
             desc="Run this scan on managed infra with more depth."
@@ -791,6 +805,83 @@ function AgentsTab({ run }: { run: LoadedRun }) {
           onClose={() => setSelectedId(null)}
         />
       )}
+    </div>
+  );
+}
+
+// Live steering composer. Targets the agent selected in the graph; with none
+// selected it falls back to the root agent (no parent). Only rendered while the
+// scan is live and the viewer runs in-process (see AgentsTab.steerable).
+function SteerComposer({
+  agents,
+  selectedId,
+}: {
+  agents: TranscriptAgent[];
+  selectedId: string | null;
+}) {
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+
+  const rootAgent = agents.find((a) => !a.parent_id) ?? agents[0] ?? null;
+  const target =
+    (selectedId ? (agents.find((a) => a.id === selectedId) ?? null) : null) ?? rootAgent;
+
+  const send = useCallback(async () => {
+    const text = message.trim();
+    if (!text || sending || !target) return;
+    setSending(true);
+    setFeedback(null);
+    const res = await steerAgent(target.id, text);
+    setSending(false);
+    if (res.ok) {
+      setMessage("");
+      setFeedback(`Sent to ${target.name}`);
+      track("agent_steered");
+    } else if (res.error === "not_delivered") {
+      setFeedback("Could not reach that agent (it may have finished).");
+    } else {
+      setFeedback("Could not send that message. Try again.");
+    }
+  }, [message, sending, target]);
+
+  return (
+    <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
+      <div className="flex items-center gap-2">
+        <Radio className="w-4 h-4 text-[#888]" aria-hidden="true" />
+        <h2 className="text-sm font-semibold text-white">Steer the agents</h2>
+      </div>
+      <p className="mt-1 mb-3 text-xs text-[#666]">
+        Send a live instruction to{" "}
+        <span className="text-[#aaa]">{target ? target.name : "the agent"}</span>
+        {selectedId ? " (selected)" : " (root)"}. Click an agent in the graph to steer it directly.
+      </p>
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          placeholder="e.g. Focus on the authentication flow next"
+          maxLength={4000}
+          disabled={sending || !target}
+          className="flex-1 min-w-0 rounded-lg border border-[#2a2a2a] bg-[rgba(255,255,255,0.03)] px-3 py-2 text-sm text-white placeholder:text-[#555] focus:outline-none focus:border-[#3a3a3a] disabled:opacity-50"
+        />
+        <button
+          onClick={() => void send()}
+          disabled={sending || !message.trim() || !target}
+          className="inline-flex items-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-medium text-black transition-opacity hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+        >
+          <Send className="w-3.5 h-3.5" aria-hidden="true" />
+          {sending ? "Sending" : "Send"}
+        </button>
+      </div>
+      {feedback && <p className="mt-2 text-xs text-[#888]">{feedback}</p>}
     </div>
   );
 }

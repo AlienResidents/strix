@@ -179,6 +179,28 @@ export async function fetchRuns(): Promise<RunsPayload> {
   };
 }
 
+export interface Capabilities {
+  can_steer: boolean;
+}
+
+export type SteerResult = { ok: true } | { ok: false; error: string };
+
+/** GET /api/capabilities. can_steer is true only inside a live in-TUI scan. */
+export async function fetchCapabilities(): Promise<Capabilities> {
+  const obj = (await getJson("/api/capabilities")) as Partial<Capabilities>;
+  return { can_steer: obj?.can_steer === true };
+}
+
+/** POST /api/agents/steer. Sends a steering instruction to a running agent. */
+export async function steerAgent(agentId: string, message: string): Promise<SteerResult> {
+  const { ok, data } = await postJson("/api/agents/steer", {
+    agent_id: agentId,
+    message,
+  });
+  if (ok && data.ok === true) return { ok: true };
+  return { ok: false, error: String(data.error ?? "unavailable") };
+}
+
 export async function fetchAuthStatus(): Promise<AuthStatus> {
   const obj = (await getJson("/api/auth/status")) as Partial<AuthStatus>;
   return { verified: obj?.verified === true, email: obj?.email ?? null };

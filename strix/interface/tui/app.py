@@ -1844,7 +1844,19 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 self._set_viewer_cta("[#eab308]Viewer UI not built[/]")
                 return
             run_dir = self.report_state.get_run_dir()
-            httpd, url = serve(run_dir, open_browser=True)
+
+            def _viewer_steer(agent_id: str, message: str) -> bool:
+                # Reuse the exact TUI delivery path, but target the agent the
+                # web graph selected (not the TUI's current selection).
+                return send_user_message_to_agent(
+                    coordinator=self.coordinator,
+                    loop=self._scan_loop,
+                    live_view=self.live_view,
+                    target_agent_id=agent_id,
+                    message=message,
+                )
+
+            httpd, url = serve(run_dir, open_browser=True, steer_handler=_viewer_steer)
         except Exception:
             logger.debug("failed to start local viewer", exc_info=True)
             self._set_viewer_cta("[red]Viewer failed to start[/]")

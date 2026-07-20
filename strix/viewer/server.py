@@ -22,7 +22,7 @@ import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from strix.core.paths import run_record_path
@@ -35,6 +35,10 @@ from strix.viewer.transcript import (
     read_vulnerabilities,
     severity_counts,
 )
+
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 logger = logging.getLogger(__name__)
@@ -103,12 +107,21 @@ def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path
 
 
 class _ViewerState:
-    def __init__(self, run_dir: Path, assets_dir: Path) -> None:
+    def __init__(
+        self,
+        run_dir: Path,
+        assets_dir: Path,
+        steer_handler: Callable[[str, str], bool] | None = None,
+    ) -> None:
         self.run_dir = run_dir
         self.assets_dir = assets_dir
         # The strix_runs directory that holds the launched run; used to
         # enumerate and resolve other runs for the history list.
         self.base_dir = run_dir.parent
+        # Set only when the viewer runs inside a live scan process (the TUI
+        # launcher), which can deliver a message to a running agent. Absent for
+        # standalone ``strix view`` / finished runs, so steering is unavailable.
+        self.steer_handler = steer_handler
 
 
 def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
@@ -148,6 +161,8 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                     self._handle_forget()
                 elif path == "/api/report/send":
                     self._handle_report_send()
+                elif path == "/api/agents/steer":
+                    self._handle_steer()
                 else:
                     self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown endpoint"})
             except BrokenPipeError:
@@ -203,6 +218,13 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             if path == "/api/runs":
                 payload = build_runs_payload(state.base_dir, verified=auth.is_verified())
                 self._send_json(HTTPStatus.OK, payload)
+                return
+            if path == "/api/capabilities":
+                # Steering is only possible when the viewer shares a live scan's
+                # coordinator + event loop (the TUI launcher wires a handler).
+                self._send_json(
+                    HTTPStatus.OK, {"can_steer": state.steer_handler is not None}
+                )
                 return
             if path == "/api/auth/status":
                 record = auth.read_auth()
@@ -299,6 +321,35 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 {"ok": True, "password": password, "filename": filename},
             )
 
+        # Cap on a steering message so a runaway client cannot flood the agent.
+        _STEER_MESSAGE_MAX = 4000
+
+        def _handle_steer(self) -> None:
+            body = self._read_body()
+            agent_id = body.get("agent_id")
+            message = body.get("message")
+            if not isinstance(agent_id, str) or not agent_id.strip():
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_agent_id"})
+                return
+            if (
+                not isinstance(message, str)
+                or not message.strip()
+                or len(message) > self._STEER_MESSAGE_MAX
+            ):
+                self._send_json(HTTPStatus.BAD_REQUEST, {"error": "invalid_message"})
+                return
+            if state.steer_handler is None:
+                # Standalone / finished-run viewing has no live scan to steer.
+                self._send_json(
+                    HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"}
+                )
+                return
+            delivered = state.steer_handler(agent_id, message)
+            if delivered:
+                self._send_json(HTTPStatus.OK, {"ok": True})
+            else:
+                self._send_json(HTTPStatus.OK, {"ok": False, "error": "not_delivered"})
+
         def _send_relay_error(self, exc: auth.RelayError) -> None:
             status_by_code = {
                 "rate_limited": HTTPStatus.TOO_MANY_REQUESTS,
@@ -359,15 +410,20 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 0,
     open_browser: bool = True,
+    steer_handler: Callable[[str, str], bool] | None = None,
 ) -> tuple[ThreadingHTTPServer, str]:
     """Start the viewer server on a background thread and return (server, url).
 
     Binds an ephemeral port by default. If a fixed ``port`` is requested but in
     use, falls back to an ephemeral port. Reused by both the ``strix view``
     command and the in-TUI launcher; callers own the server's lifetime.
+
+    ``steer_handler`` is supplied only by the in-TUI launcher, which runs inside
+    the live scan process and can forward a message to a running agent. Left
+    ``None`` (standalone ``strix view``), steering is reported unavailable.
     """
     assets_dir = bundle_dir()
-    state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir)
+    state = _ViewerState(run_dir=run_dir, assets_dir=assets_dir, steer_handler=steer_handler)
     handler = _make_handler(state)
 
     try:
