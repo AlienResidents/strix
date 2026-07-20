@@ -562,8 +562,7 @@ function EmailReportCta({ onOpenEmail }: { onOpenEmail: () => void }) {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-semibold text-white">Email an encrypted PDF report of this run</p>
           <p className="mt-0.5 text-xs text-[#888]">
-            Encrypted with a key only you can see, so it is impossible for us to read it.
-            We just verify your email with a one-time code before sending.
+            Encrypted with a key only you can see, email verified with a one-time code before sending.
           </p>
         </div>
         <span className="flex-shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black transition-opacity group-hover:opacity-90">
