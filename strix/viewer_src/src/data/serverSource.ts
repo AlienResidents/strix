@@ -56,30 +56,38 @@ async function getJson(path: string): Promise<unknown> {
   return res.json();
 }
 
-export async function fetchRunSummary(): Promise<{
+/** Build a ``?run=<name>`` suffix for run-scoped data endpoints. */
+function runQuery(runName?: string | null): string {
+  return runName ? `?run=${encodeURIComponent(runName)}` : "";
+}
+
+export async function fetchRunSummary(runName?: string | null): Promise<{
   summary: ParsedRunSummary;
   raw: Record<string, unknown>;
   finished: boolean;
 }> {
-  const raw = (await getJson("/api/run")) as Record<string, unknown>;
+  const raw = (await getJson("/api/run" + runQuery(runName))) as Record<string, unknown>;
   // parseRunJson tolerates extra keys and takes raw TEXT.
   const summary = parseRunJson(JSON.stringify(raw));
   const finished = raw.finished === true;
   return { summary, raw, finished };
 }
 
-export async function fetchVulnerabilities(runId: string | null): Promise<Vulnerability[]> {
-  const arr = await getJson("/api/vulnerabilities");
+export async function fetchVulnerabilities(
+  runId: string | null,
+  runName?: string | null
+): Promise<Vulnerability[]> {
+  const arr = await getJson("/api/vulnerabilities" + runQuery(runName));
   return parseVulnerabilitiesJson(JSON.stringify(arr), runId);
 }
 
-export async function fetchReportMarkdown(): Promise<string | null> {
-  const obj = (await getJson("/api/report")) as { markdown?: string };
+export async function fetchReportMarkdown(runName?: string | null): Promise<string | null> {
+  const obj = (await getJson("/api/report" + runQuery(runName))) as { markdown?: string };
   return obj?.markdown ?? null;
 }
 
-export async function fetchTranscript(): Promise<Transcript> {
-  const obj = (await getJson("/api/transcript")) as Partial<Transcript>;
+export async function fetchTranscript(runName?: string | null): Promise<Transcript> {
+  const obj = (await getJson("/api/transcript" + runQuery(runName))) as Partial<Transcript>;
   return {
     agents: Array.isArray(obj?.agents) ? obj.agents : [],
     events: Array.isArray(obj?.events) ? obj.events : [],
@@ -87,12 +95,121 @@ export async function fetchTranscript(): Promise<Transcript> {
 }
 
 /** One-shot fetch of every endpoint (used on mount and on final settle). */
-export async function fetchAll(): Promise<LoadedRun> {
-  const { summary, raw, finished } = await fetchRunSummary();
+export async function fetchAll(runName?: string | null): Promise<LoadedRun> {
+  const { summary, raw, finished } = await fetchRunSummary(runName);
   const [vulnerabilities, reportMarkdown, transcript] = await Promise.all([
-    fetchVulnerabilities(summary.runId).catch(() => [] as Vulnerability[]),
-    fetchReportMarkdown().catch(() => null),
-    fetchTranscript().catch(() => ({ agents: [], events: [] }) as Transcript),
+    fetchVulnerabilities(summary.runId, runName).catch(() => [] as Vulnerability[]),
+    fetchReportMarkdown(runName).catch(() => null),
+    fetchTranscript(runName).catch(() => ({ agents: [], events: [] }) as Transcript),
   ]);
   return { summary, raw, finished, vulnerabilities, reportMarkdown, transcript };
+}
+
+// ---------------------------------------------------------------------------
+// Run history + email auth + report send
+//
+// These endpoints back the "Your runs" sidebar section. Auth and report-send
+// responses carry a meaningful JSON body on non-2xx statuses (an ``error``
+// code), so they read the body regardless of status rather than throwing.
+// ---------------------------------------------------------------------------
+
+export interface RunSeverityCounts {
+  critical: number;
+  high: number;
+  medium: number;
+  low: number;
+}
+
+export interface RunListEntry {
+  name: string;
+  target: string | null;
+  scan_mode: string | null;
+  status: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  finished: boolean;
+  severity_counts: RunSeverityCounts;
+}
+
+export interface RunsPayload {
+  locked: boolean;
+  count: number;
+  runs: RunListEntry[];
+}
+
+export interface AuthStatus {
+  verified: boolean;
+  email: string | null;
+}
+
+export type OtpStartResult = { ok: true } | { ok: false; error: string };
+export type OtpVerifyResult =
+  | { verified: true; email: string }
+  | { verified: false; error: string };
+export type SendReportResult =
+  | { ok: true; password: string; filename: string }
+  | { ok: false; error: string };
+
+async function postJson(
+  path: string,
+  body: Record<string, unknown>
+): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
+  const res = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    cache: "no-store",
+  });
+  let data: Record<string, unknown> = {};
+  try {
+    const parsed = await res.json();
+    if (parsed && typeof parsed === "object") data = parsed as Record<string, unknown>;
+  } catch {
+    /* empty or non-JSON body */
+  }
+  return { ok: res.ok, status: res.status, data };
+}
+
+export async function fetchRuns(): Promise<RunsPayload> {
+  const obj = (await getJson("/api/runs")) as Partial<RunsPayload>;
+  return {
+    locked: obj?.locked ?? true,
+    count: typeof obj?.count === "number" ? obj.count : 0,
+    runs: Array.isArray(obj?.runs) ? (obj.runs as RunListEntry[]) : [],
+  };
+}
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+  const obj = (await getJson("/api/auth/status")) as Partial<AuthStatus>;
+  return { verified: obj?.verified === true, email: obj?.email ?? null };
+}
+
+export async function otpStart(email: string): Promise<OtpStartResult> {
+  const { ok, data } = await postJson("/api/auth/otp/start", { email });
+  if (ok && data.ok === true) return { ok: true };
+  return { ok: false, error: String(data.error ?? "unavailable") };
+}
+
+export async function otpVerify(email: string, code: string): Promise<OtpVerifyResult> {
+  const { ok, data } = await postJson("/api/auth/otp/verify", { email, code });
+  if (ok && data.verified === true) {
+    return { verified: true, email: String(data.email ?? email) };
+  }
+  return { verified: false, error: String(data.error ?? "invalid_code") };
+}
+
+export async function forgetAuth(): Promise<void> {
+  await postJson("/api/auth/forget", {});
+}
+
+export async function sendReport(runName?: string | null): Promise<SendReportResult> {
+  const { ok, data } = await postJson("/api/report/send", runName ? { run: runName } : {});
+  if (ok && data.ok === true) {
+    return {
+      ok: true,
+      password: String(data.password ?? ""),
+      filename: String(data.filename ?? "strix-report.pdf"),
+    };
+  }
+  return { ok: false, error: String(data.error ?? "unavailable") };
 }
