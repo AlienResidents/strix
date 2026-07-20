@@ -520,6 +520,7 @@ function FindingsList({
               label="Attack surface monitoring"
               desc="Continuous coverage for your whole org."
               slug="asm"
+              surface="empty_state"
               icon={Radar}
             />
           </div>
@@ -738,12 +739,14 @@ function AgentsTab({ run }: { run: LoadedRun }) {
             label="Steer agents from the web"
             desc="Guide the agents live while they scan."
             slug="live_scan_prompt"
+            surface="agents"
             icon={Radio}
           />
           <ProInlineCta
             label="Re-run in Strix Cloud with more depth"
             desc="Run this scan on managed infra with more depth."
             slug="live_scan"
+            surface="agents"
             icon={Rocket}
           />
         </div>
