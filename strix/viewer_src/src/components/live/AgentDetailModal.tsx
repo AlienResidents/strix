@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { AgentTranscript } from "./AgentTranscript";
-import { SIGNUP_URL, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
 import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
 
 /** Status -> the small leading dot color, matching the graph node styling. */
@@ -101,10 +101,10 @@ export function AgentDetailModal({
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#222] px-5 py-3">
           <span className="text-xs text-[#888]">Steer agents live from your terminal.</span>
           <a
-            href={SIGNUP_URL}
+            href={ctaUrl(SIGNUP_URL, "steer_agent")}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackCta("steer_agent")}
+            onClick={() => trackCta("steer_agent", "agents")}
             className="text-xs font-medium text-[#60a5fa] hover:underline"
           >
             Upgrade to Pro to steer agents from the web &rarr;

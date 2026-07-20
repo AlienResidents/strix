@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import { ArrowUpRight } from "lucide-react";
-import { SIGNUP_URL, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
 import type { ProFeature } from "@/lib/pro-features";
 
 /**
@@ -69,14 +69,14 @@ export interface ProItem {
  * Card-style Pro feature tile: icon + name + one-liner + Pro tag + arrow.
  * Used in the top upsell row and inline CTA grids.
  */
-export function ProTile({ item }: { item: ProItem }) {
+export function ProTile({ item, surface }: { item: ProItem; surface?: string }) {
   const Icon = item.icon;
   return (
     <a
-      href={SIGNUP_URL}
+      href={ctaUrl(SIGNUP_URL, item.slug)}
       target="_blank"
       rel="noopener noreferrer"
-      onClick={() => trackCta(item.slug)}
+      onClick={() => trackCta(item.slug, surface)}
       title={item.desc}
       className="group block cursor-pointer rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-4 text-left transition-colors hover:border-[#444]"
     >
@@ -140,19 +140,21 @@ export function ProInlineCta({
   desc,
   slug,
   icon: Icon,
+  surface,
 }: {
   label: string;
   desc: string;
   slug: string;
   icon: React.ElementType;
+  surface?: string;
 }) {
   return (
     <Tooltip text={desc}>
       <a
-        href={SIGNUP_URL}
+        href={ctaUrl(SIGNUP_URL, slug)}
         target="_blank"
         rel="noopener noreferrer"
-        onClick={() => trackCta(slug)}
+        onClick={() => trackCta(slug, surface)}
         className="group inline-flex items-center gap-2 rounded-lg border border-[#222] bg-[rgba(255,255,255,0.02)] px-3 py-2 text-sm text-[#aaa] transition-colors hover:border-[#444] hover:text-white"
       >
         <Icon className="h-4 w-4 text-[#888] transition-colors group-hover:text-white" aria-hidden="true" />

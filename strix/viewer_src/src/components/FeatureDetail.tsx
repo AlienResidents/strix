@@ -5,7 +5,7 @@ import {
   Users,
   ArrowUpRight,
 } from "lucide-react";
-import { SIGNUP_URL, PRICING_URL, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, PRICING_URL, ctaUrl, trackCta } from "@/lib/cta";
 import type { ProFeature } from "@/lib/pro-features";
 import { ProTag } from "@/components/ProCta";
 
@@ -70,20 +70,20 @@ export default function FeatureDetail({ feature }: { feature: ProFeature }) {
 
         <div className="mt-6 flex flex-col items-center gap-3">
           <a
-            href={SIGNUP_URL}
+            href={ctaUrl(SIGNUP_URL, feature.slug)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackCta(feature.slug)}
+            onClick={() => trackCta(feature.slug, "feature_page")}
             className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90"
           >
             Start free
             <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
           </a>
           <a
-            href={PRICING_URL}
+            href={ctaUrl(PRICING_URL, feature.slug)}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackCta(`${feature.slug}_pricing`)}
+            onClick={() => trackCta(feature.slug, "feature_page_plans")}
             className="inline-flex items-center gap-1 text-xs text-[#888] transition-colors hover:text-white"
           >
             View all plans

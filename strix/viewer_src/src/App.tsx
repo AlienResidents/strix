@@ -38,7 +38,7 @@ import {
   type LoadedRun,
   type RunsPayload,
 } from "@/data/serverSource";
-import { SIGNUP_URL, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
 import EmailReportView from "@/components/EmailReportView";
@@ -183,20 +183,20 @@ export default function App() {
     setView("overview");
   }, []);
 
-  const goEmail = useCallback((skipDisclosure: boolean) => {
-    trackCta("email_report");
+  const goEmail = useCallback((skipDisclosure: boolean, surface: string) => {
+    trackCta("email_report", surface);
     setEmailPurpose("report");
     setEmailSkipDisclosure(skipDisclosure);
     setView("email");
   }, []);
 
   // Sidebar entry keeps the disclosure (first place those users see it);
-  const openEmail = useCallback(() => goEmail(false), [goEmail]);
+  const openEmail = useCallback(() => goEmail(false, "sidebar"), [goEmail]);
   // the Overview CTA already states the tradeoff, so it starts the flow directly.
-  const openEmailFromOverview = useCallback(() => goEmail(true), [goEmail]);
+  const openEmailFromOverview = useCallback(() => goEmail(true, "overview"), [goEmail]);
 
   const openVerify = useCallback(() => {
-    trackCta("history_unlock");
+    trackCta("history_unlock", "past_runs");
     setEmailPurpose("verify");
     setEmailSkipDisclosure(false);
     setView("email");
@@ -208,7 +208,7 @@ export default function App() {
   }, [refreshRuns]);
 
   const selectFeature = useCallback((slug: string) => {
-    trackCta(`nav_${slug}`);
+    trackCta(slug, "sidebar_nav");
     setActiveFeature(slug);
     setView("feature");
   }, []);
@@ -244,10 +244,10 @@ export default function App() {
         <div className="border-b border-[#222]">
           <div className="max-w-[72rem] mx-auto px-6 py-4 flex items-center gap-1.5">
             <a
-              href="https://app.strix.ai"
+              href={ctaUrl("https://app.strix.ai", "logo")}
               target="_blank"
               rel="noopener noreferrer"
-              onClick={() => trackCta("logo")}
+              onClick={() => trackCta("logo", "topbar")}
               className="flex items-center gap-1.5 opacity-90 transition-opacity hover:opacity-100 lg:hidden"
               title="Open Strix Cloud"
             >
@@ -266,10 +266,10 @@ export default function App() {
                 />
               )}
               <a
-                href={SIGNUP_URL}
+                href={ctaUrl(SIGNUP_URL, "run_in_cloud")}
                 target="_blank"
                 rel="noopener noreferrer"
-                onClick={() => trackCta("run_in_cloud")}
+                onClick={() => trackCta("run_in_cloud", "topbar")}
                 className="inline-flex items-center gap-1 rounded-lg bg-white px-3 py-1.5 text-xs font-semibold text-black transition-opacity hover:opacity-90"
               >
                 Run in the cloud
@@ -657,7 +657,7 @@ function OverviewTab({
       {/* Near Recommendations: act on the fixes. */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         {RECOMMENDATION_CTAS.map((item) => (
-          <ProTile key={item.slug} item={item} />
+          <ProTile key={item.slug} item={item} surface="overview" />
         ))}
       </div>
 
@@ -666,7 +666,7 @@ function OverviewTab({
         <p className="mb-2 text-sm font-semibold text-white">Continuous coverage for your org</p>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           {COVERAGE_CTAS.map((item) => (
-            <ProTile key={item.slug} item={item} />
+            <ProTile key={item.slug} item={item} surface="overview" />
           ))}
         </div>
       </div>

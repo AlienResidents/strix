@@ -9,7 +9,7 @@ import {
   LogOut,
   ShieldCheck,
 } from "lucide-react";
-import { SIGNUP_URL, trackCta } from "@/lib/cta";
+import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
 import { ProNavItem } from "@/components/ProCta";
 import { FEATURES, PLATFORM_ORDER } from "@/lib/pro-features";
 import type { View } from "@/App";
@@ -57,10 +57,10 @@ export default function Sidebar({
         {/* Header: wordmark + Start free + signed-in chip */}
         <div className="px-1.5">
           <a
-            href="https://app.strix.ai"
+            href={ctaUrl("https://app.strix.ai", "logo")}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackCta("logo")}
+            onClick={() => trackCta("logo", "sidebar")}
             className="flex items-center gap-1.5 opacity-90 transition-opacity hover:opacity-100"
             title="Open Strix Cloud"
           >
@@ -68,10 +68,10 @@ export default function Sidebar({
             <span className="text-base font-medium tracking-tight text-white">Strix</span>
           </a>
           <a
-            href={SIGNUP_URL}
+            href={ctaUrl(SIGNUP_URL, "sidebar_start_free")}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={() => trackCta("sidebar_start_free")}
+            onClick={() => trackCta("sidebar_start_free", "sidebar")}
             className="mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
           >
             Explore full platform

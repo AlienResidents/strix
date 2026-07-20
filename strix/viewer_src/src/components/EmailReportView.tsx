@@ -6,6 +6,7 @@ import {
   sendReport,
   type AuthStatus,
 } from "@/data/serverSource";
+import { track } from "@/lib/cta";
 
 /**
  * The email-report / email-verification flow rendered as its own page (not a
@@ -87,6 +88,7 @@ export default function EmailReportView({
     setError(null);
     const result = await sendReport(activeRun);
     if (result.ok) {
+      track("report_sent");
       setPassword(result.password);
       setFilename(result.filename);
       setStep("password");
@@ -126,6 +128,7 @@ export default function EmailReportView({
     }
     const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
     if (COMMON_FREE_DOMAINS.has(domain)) {
+      track("work_email_required");
       setError(OTP_START_ERRORS.work_email_required);
       return;
     }
@@ -134,9 +137,11 @@ export default function EmailReportView({
     const result = await otpStart(value);
     setBusy(false);
     if (result.ok) {
+      track("email_submitted", { purpose });
       setNotice(`We sent a 6-digit code to ${value}.`);
       setStep("code");
     } else {
+      if (result.error === "work_email_required") track("work_email_required");
       setError(OTP_START_ERRORS[result.error] ?? "Could not send a code. Try again.");
     }
   };
@@ -155,6 +160,7 @@ export default function EmailReportView({
       setError("That code did not match. Check it and try again.");
       return;
     }
+    track("email_verified", { purpose });
     setSentTo(result.email);
     onAuthChanged();
     if (verifyOnly) onExit("history");
