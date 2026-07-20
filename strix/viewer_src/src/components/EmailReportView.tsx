@@ -151,7 +151,7 @@ export default function EmailReportView({
   const confirmationEmail = sentTo || auth?.email || email.trim();
 
   return (
-    <div className="space-y-4">
+    <div className="mx-auto max-w-md space-y-4">
       <button
         onClick={() => onExit(verifyOnly ? "history" : "overview")}
         className="cursor-pointer inline-flex items-center gap-1.5 text-sm text-[#888] transition-colors hover:text-white"
@@ -168,7 +168,7 @@ export default function EmailReportView({
       </div>
 
       <div
-        className="max-w-md rounded-2xl bg-[rgba(255,255,255,0.02)] p-6"
+        className="w-full rounded-2xl bg-[rgba(255,255,255,0.02)] p-6"
         style={{ border: "1px solid #2a2a2a" }}
       >
         <p className="mb-4 text-xs text-[#666]">
