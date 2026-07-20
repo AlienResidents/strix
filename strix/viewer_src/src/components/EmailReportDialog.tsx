@@ -187,8 +187,8 @@ export default function EmailReportDialog({
             <Mail className="h-4 w-4 text-emerald-400" aria-hidden="true" />
           </div>
           <div>
-            <h2 className="text-base font-semibold text-white">Email an encrypted PDF</h2>
-            <p className="text-xs text-[#666]">Unlock with your email</p>
+            <h2 className="text-base font-semibold text-white">Email an encrypted PDF report of this run</h2>
+            <p className="text-xs text-[#666]">Verified by a one-time code sent to your email</p>
           </div>
         </div>
 
