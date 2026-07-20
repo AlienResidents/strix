@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
-import { Radio, X } from "lucide-react";
+import { X } from "lucide-react";
 import { AgentTranscript } from "./AgentTranscript";
-import { AgentSteerInput } from "./AgentSteerInput";
+import { ScanPromptComposer } from "./ScanPromptComposer";
 import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
 
 /** Status -> the small leading dot color, matching the graph node styling. */
@@ -102,11 +102,11 @@ export function AgentDetailModal({
 
         {steerable && (
           <div className="border-t border-[#222] px-5 py-3">
-            <div className="mb-2 flex items-center gap-1.5">
-              <Radio className="h-3.5 w-3.5 text-[#888]" aria-hidden="true" />
-              <span className="text-xs font-medium text-[#aaa]">Steer this agent</span>
-            </div>
-            <AgentSteerInput agentId={agent.id} agentName={agent.name} />
+            <ScanPromptComposer
+              agents={[agent]}
+              fixedAgentId={agent.id}
+              className="mt-0"
+            />
           </div>
         )}
       </div>

@@ -12,7 +12,6 @@ import {
   Radar,
   GitPullRequest,
   Rocket,
-  Radio,
   ArrowUpRight,
   History,
 } from "lucide-react";
@@ -25,7 +24,7 @@ import { IssueSeveritySummary } from "@/components/IssueSeveritySummary";
 import AgentGraph from "@/components/live/AgentGraph";
 import { buildGraphAgents } from "@/components/live/AgentTranscript";
 import AgentDetailModal from "@/components/live/AgentDetailModal";
-import { AgentSteerInput } from "@/components/live/AgentSteerInput";
+import { ScanPromptComposer } from "@/components/live/ScanPromptComposer";
 import { severityCounts, type ParsedRunSummary } from "@/lib/local-run-parser";
 import {
   fetchAll,
@@ -39,7 +38,6 @@ import {
   type AuthStatus,
   type LoadedRun,
   type RunsPayload,
-  type TranscriptAgent,
 } from "@/data/serverSource";
 import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
 import { runTitle } from "@/lib/target-utils";
@@ -778,9 +776,7 @@ function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
       </div>
 
       {/* Live steering: only in-process while the scan runs. Otherwise omitted. */}
-      {steerable && (
-        <SteerComposer agents={agents} selectedId={selectedId} />
-      )}
+      {steerable && <ScanPromptComposer agents={agents} />}
 
       {/* Re-run always routes to Strix Cloud. */}
       <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
@@ -805,36 +801,6 @@ function AgentsTab({ run, canSteer }: { run: LoadedRun; canSteer: boolean }) {
           onClose={() => setSelectedId(null)}
         />
       )}
-    </div>
-  );
-}
-
-// Live steering composer. Targets the agent selected in the graph; with none
-// selected it falls back to the root agent (no parent). Only rendered while the
-// scan is live and the viewer runs in-process (see AgentsTab.steerable).
-function SteerComposer({
-  agents,
-  selectedId,
-}: {
-  agents: TranscriptAgent[];
-  selectedId: string | null;
-}) {
-  const rootAgent = agents.find((a) => !a.parent_id) ?? agents[0] ?? null;
-  const target =
-    (selectedId ? (agents.find((a) => a.id === selectedId) ?? null) : null) ?? rootAgent;
-  if (!target) return null;
-
-  return (
-    <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
-      <div className="flex items-center gap-2">
-        <Radio className="w-4 h-4 text-[#888]" aria-hidden="true" />
-        <h2 className="text-sm font-semibold text-white">Steer the agents</h2>
-      </div>
-      <p className="mt-1 mb-3 text-xs text-[#666]">
-        Send a live instruction to <span className="text-[#aaa]">{target.name}</span>
-        {selectedId ? " (selected)" : " (root)"}. Open an agent to steer it directly.
-      </p>
-      <AgentSteerInput key={target.id} agentId={target.id} agentName={target.name} />
     </div>
   );
 }
