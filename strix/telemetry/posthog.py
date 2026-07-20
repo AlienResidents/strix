@@ -153,12 +153,29 @@ def viewer_opened(source: str, live: bool) -> None:
     )
 
 
-def viewer_cta_clicked(cta: str) -> None:
+def viewer_cta_clicked(cta: str, surface: str | None = None) -> None:
+    props = {
+        **base_props(),
+        "cta": cta[:64],
+    }
+    if surface:
+        props["surface"] = surface[:64]
+    _send("viewer_cta_clicked", props)
+
+
+_VIEWER_EMAIL_STEPS = frozenset(
+    {"email_submitted", "email_verified", "report_sent", "work_email_required"}
+)
+
+
+def viewer_email_event(step: str, purpose: str | None = None) -> None:
+    if step not in _VIEWER_EMAIL_STEPS:
+        return
     _send(
-        "viewer_cta_clicked",
+        f"viewer_{step}",
         {
             **base_props(),
-            "cta": cta[:64],
+            **({"purpose": purpose} if purpose else {}),
         },
     )
 

@@ -166,15 +166,34 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 return {}
             return body if isinstance(body, dict) else {}
 
+        # Funnel events the viewer is allowed to forward. This handler is the
+        # trust boundary: only these event names, with only their known props,
+        # ever reach PostHog. Everything else (including any PII) is dropped.
+        _EMAIL_EVENTS = frozenset(
+            {"email_submitted", "email_verified", "report_sent", "work_email_required"}
+        )
+
         def _handle_event(self) -> None:
             body = self._read_body()
-            # Only the viewer's own sign-up/upsell CTA click is forwarded, as an
-            # anonymous PostHog event that respects the global telemetry opt-out.
-            if body.get("event") == "cta_clicked":
-                cta = str(body.get("cta") or "unknown")
+            # Forwarded as anonymous PostHog events that respect the global
+            # telemetry opt-out. Never forward the email, code, or report body:
+            # only the whitelisted event names and their known props are passed.
+            event = body.get("event")
+            if event == "cta_clicked":
                 from strix.telemetry import posthog  # noqa: PLC0415
 
-                posthog.viewer_cta_clicked(cta)
+                cta = str(body.get("cta") or "unknown")
+                surface = body.get("surface")
+                posthog.viewer_cta_clicked(
+                    cta, surface=str(surface) if surface else None
+                )
+            elif event in self._EMAIL_EVENTS:
+                from strix.telemetry import posthog  # noqa: PLC0415
+
+                purpose = body.get("purpose")
+                posthog.viewer_email_event(
+                    str(event), purpose=str(purpose) if purpose else None
+                )
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
 
