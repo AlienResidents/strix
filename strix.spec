@@ -206,6 +206,11 @@ hiddenimports += collect_submodules('reportlab')
 # reportlab ships bundled fonts (.pfb/.afm) it needs at runtime.
 datas += collect_data_files('reportlab')
 
+# reportlab imports PIL (pillow) lazily for image handling, so it must be
+# bundled explicitly and kept out of the excludes list below.
+hiddenimports += collect_submodules('PIL')
+datas += collect_data_files('PIL')
+
 excludes = [
     # Sandbox-only packages
     'playwright',
@@ -252,7 +257,6 @@ excludes = [
     'numpy',
     'pandas',
     'scipy',
-    'PIL',
     'cv2',
 ]
 
