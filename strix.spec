@@ -159,9 +159,20 @@ hiddenimports = [
     'strix.report.state',
     'strix.report.writer',
     'strix.viewer',
+    'strix.viewer.auth',
     'strix.viewer.cli',
+    'strix.viewer.report_pdf',
     'strix.viewer.server',
     'strix.viewer.transcript',
+
+    # PDF report generation + encryption
+    'reportlab',
+    'reportlab.pdfgen',
+    'reportlab.pdfbase',
+    'reportlab.lib',
+    'reportlab.platypus',
+    'pypdf',
+    'cryptography',
     'strix.runtime',
     'strix.runtime.backends',
     'strix.runtime.caido_bootstrap',
@@ -189,6 +200,11 @@ hiddenimports += collect_submodules('textual')
 hiddenimports += collect_submodules('rich')
 hiddenimports += collect_submodules('pydantic')
 hiddenimports += collect_submodules('pygments')
+# reportlab loads renderers/fonts dynamically, so pull its whole tree in.
+hiddenimports += collect_submodules('reportlab')
+
+# reportlab ships bundled fonts (.pfb/.afm) it needs at runtime.
+datas += collect_data_files('reportlab')
 
 excludes = [
     # Sandbox-only packages

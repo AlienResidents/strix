@@ -44,6 +44,9 @@ dependencies = [
   "requests>=2.32.0",
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
+  "reportlab>=4.0",
+  "pypdf>=5.0",
+  "cryptography>=42",
 ]
 
 [project.optional-dependencies]
@@ -115,6 +118,8 @@ module = [
     "docker.*",
     "caido_sdk_client.*",
     "pydantic_settings.*",
+    "reportlab.*",
+    "pypdf.*",
 ]
 ignore_missing_imports = true
 disable_error_code = ["import-untyped"]
@@ -205,6 +210,10 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
+# Test doubles use fixture tokens/passwords and match a callee signature whose
+# args they intentionally ignore.
+"tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]
+"tests/test_report_pdf.py" = ["S105", "S106"]
 # Lazy imports inside functions to avoid circular dependency with
 # strix.telemetry / strix.report.dedupe / cvss.
 "strix/tools/notes/tools.py" = ["PLC0415", "TC002"]
