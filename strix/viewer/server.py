@@ -24,7 +24,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from strix.core.paths import run_record_path
 from strix.viewer import auth
@@ -127,12 +127,13 @@ class _ViewerState:
         # launcher), which can deliver a message to a running agent. Absent for
         # standalone ``strix view`` / finished runs, so steering is unavailable.
         self.steer_handler = steer_handler
-        # Unguessable per-process capability handed to the local browser (via a
-        # cookie on index.html) and required on the sensitive routes. It is the
-        # request-level authorization Greptile asked for: reachability of the
-        # port (e.g. when bound with ``--host``) is no longer sufficient to
-        # steer a live scan or trigger a report; only the browser that loaded
-        # the page this process served holds the token.
+        # Unguessable per-process capability. It is minted here, printed/opened
+        # for the operator who started the server (see ``authorized_url``), and
+        # exchanged for a session cookie only when presented on the initial page
+        # load. It is the request-level authorization the review asked for:
+        # reachability of the port (e.g. when bound with ``--host``) is not
+        # enough to steer a live scan, trigger a report, or browse history --
+        # the token is never handed to a caller who merely reaches ``/``.
         self.session_token = secrets.token_urlsafe(32)
 
 
@@ -150,7 +151,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 if path.startswith("/api/"):
                     self._handle_api(path, parse_qs(parts.query))
                 else:
-                    self._handle_static(path)
+                    self._handle_static(path, parse_qs(parts.query))
             except BrokenPipeError:
                 # The browser closed the connection mid-response (e.g. it
                 # navigated away between polls). Not an error.
@@ -233,11 +234,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.OK, {"can_steer": state.steer_handler is not None})
                 return
             if path == "/api/auth/status":
+                # Report verification through is_verified() so an expired record
+                # is advertised as unverified -- otherwise the SPA would suppress
+                # re-verification while history stays locked, stranding the user.
                 record = auth.read_auth()
                 self._send_json(
                     HTTPStatus.OK,
                     {
-                        "verified": record is not None,
+                        "verified": auth.is_verified(),
                         "email": record.get("email") if record else None,
                     },
                 )
@@ -400,7 +404,17 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             supplied = self._cookies().get(SESSION_COOKIE, "")
             return bool(supplied) and secrets.compare_digest(supplied, state.session_token)
 
-        def _handle_static(self, path: str) -> None:
+        def _token_presented(self, query: dict[str, list[str]]) -> bool:
+            """True when the request carries the correct bootstrap token.
+
+            The token reaches the operator's browser through the URL printed /
+            opened by the process that started the server, a channel an
+            arbitrary network caller on an exposed port cannot observe.
+            """
+            supplied = (query.get("token") or [""])[0]
+            return bool(supplied) and secrets.compare_digest(supplied, state.session_token)
+
+        def _handle_static(self, path: str, query: dict[str, list[str]]) -> None:
             target = self._resolve_asset(path)
             if target is None:
                 # SPA fallback: unknown non-asset routes render index.html so
@@ -415,8 +429,10 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Content-Length", str(len(content)))
-            if is_index:
-                # Hand the loading browser the per-process session capability.
+            if is_index and self._token_presented(query):
+                # Exchange the bootstrap token for the per-process session
+                # capability. Issued only when the correct token is presented,
+                # so a caller who merely reaches ``/`` never obtains it.
                 # HttpOnly (JS never needs it; fetch sends it automatically) and
                 # SameSite=Strict (never sent from a cross-site context).
                 self.send_header(
@@ -449,6 +465,17 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
     return ViewerHandler
 
 
+def authorized_url(base_url: str, token: str) -> str:
+    """URL that bootstraps the viewer session for the operator.
+
+    Presenting ``token`` on the initial page load is what mints the session
+    cookie, so this URL is printed / opened only for the operator who started
+    the server. Sharing it (rather than the bare ``base_url``) is what lets a
+    trusted remote user authorize when the viewer is exposed with ``--host``.
+    """
+    return f"{base_url}/?{urlencode({'token': token})}"
+
+
 def serve(
     run_dir: Path,
     *,
@@ -456,8 +483,11 @@ def serve(
     port: int = 0,
     open_browser: bool = True,
     steer_handler: Callable[[str, str], bool] | None = None,
-) -> tuple[ThreadingHTTPServer, str]:
-    """Start the viewer server on a background thread and return (server, url).
+) -> tuple[ThreadingHTTPServer, str, str]:
+    """Start the viewer server on a background thread; return (server, url, token).
+
+    ``url`` is the bare base; pass it through ``authorized_url(url, token)`` to
+    build the operator link that authorizes the browser.
 
     Binds an ephemeral port by default. If a fixed ``port`` is requested but in
     use, falls back to an ephemeral port. Reused by both the ``strix view``
@@ -487,9 +517,9 @@ def serve(
     thread.start()
 
     if open_browser:
-        _open_browser(url)
+        _open_browser(authorized_url(url, state.session_token))
 
-    return httpd, url
+    return httpd, url, state.session_token
 
 
 def _open_browser(url: str) -> None:
@@ -499,4 +529,4 @@ def _open_browser(url: str) -> None:
         logger.debug("could not open browser for %s", url, exc_info=True)
 
 
-__all__ = ["bundle_dir", "bundle_is_built", "serve"]
+__all__ = ["authorized_url", "bundle_dir", "bundle_is_built", "serve"]

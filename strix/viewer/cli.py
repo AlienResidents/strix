@@ -16,7 +16,7 @@ from strix.core.paths import (
     run_record_path,
     runs_base_dir,
 )
-from strix.viewer.server import bundle_is_built, serve
+from strix.viewer.server import authorized_url, bundle_is_built, serve
 from strix.viewer.transcript import read_run_summary
 
 
@@ -64,25 +64,30 @@ def run_view(argv: list[str]) -> None:
 
     run_dir = _resolve_run_dir(args.run, console)
 
-    httpd, url = serve(
+    httpd, url, token = serve(
         run_dir,
         host=args.host,
         port=args.port,
         open_browser=not args.no_open,
     )
+    # The tokened URL is what authorizes the browser (steering, report sending,
+    # history). Print it rather than the bare URL so the operator -- and only
+    # the operator -- can open or share an authorized link.
+    open_url = authorized_url(url, token)
 
     run_name = run_dir.name
     summary = read_run_summary(run_dir)
     live = not summary.get("finished", False)
 
-    from strix.telemetry import posthog  # noqa: PLC0415
+    from strix.telemetry import posthog
 
     posthog.viewer_opened(source="cli", live=live)
 
     state_label = "[#eab308]live[/]" if live else "[#22c55e]finished[/]"
     console.print()
-    console.print(f"Serving [bold white]{run_name}[/] ({state_label}) at [#60a5fa]{url}[/]")
-    console.print("[dim]Press Ctrl-C to stop the viewer.[/]")
+    console.print(f"Serving [bold white]{run_name}[/] ({state_label}) at [#60a5fa]{open_url}[/]")
+    console.print("[dim]This link authorizes the browser; anyone you share it with can steer[/]")
+    console.print("[dim]a live scan and browse history. Press Ctrl-C to stop the viewer.[/]")
     console.print()
 
     try:
@@ -110,10 +115,14 @@ def _resolve_run_dir(run: str | None, console: Console) -> Path:
 
 def _fail_no_run(console: Console, *, requested: str | None) -> NoReturn:
     base = runs_base_dir()
-    available = sorted(
-        (child.name for child in base.iterdir() if run_record_path(child).is_file()),
-        reverse=True,
-    ) if base.is_dir() else []
+    available = (
+        sorted(
+            (child.name for child in base.iterdir() if run_record_path(child).is_file()),
+            reverse=True,
+        )
+        if base.is_dir()
+        else []
+    )
 
     if requested:
         console.print(f"[bold red]No run named '{requested}' under ./{RUNS_DIR_NAME}.[/]")
