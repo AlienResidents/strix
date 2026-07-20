@@ -49,3 +49,13 @@ export function parseTarget(target: string): ParsedTarget {
   // Not a URL
   return { display: target, href: null, provider: null };
 }
+
+/**
+ * A clean, human-readable run title derived from the scan target (e.g.
+ * "arch.co") rather than the raw run dir name ("arch-co_ca3f"). Falls back to
+ * the raw name, then a generic label.
+ */
+export function runTitle(target: string | null, fallback: string): string {
+  if (target) return parseTarget(target).display.replace(/\/$/, "");
+  return fallback || "Untitled scan";
+}

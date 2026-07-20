@@ -1,5 +1,9 @@
+import { useState } from "react";
 import { History, ChevronRight, Terminal } from "lucide-react";
 import type { RunListEntry, RunsPayload, RunSeverityCounts } from "@/data/serverSource";
+import { runTitle } from "@/lib/target-utils";
+import { trackCta } from "@/lib/cta";
+import EmailVerifyInline from "@/components/EmailVerifyInline";
 
 /**
  * "Past runs" panel. Unverified users see a tease with the run count and a
@@ -45,20 +49,41 @@ function formatDate(iso: string | null): string | null {
   });
 }
 
+/**
+ * Relative time ("just now" / "5m ago" / "3h ago" / "2d ago"), falling back to
+ * the absolute date for anything older than a week (mirrors the pro app).
+ */
+function formatTimeAgo(iso: string | null): string | null {
+  if (!iso) return null;
+  const normalized = iso.trim().replace(" UTC", "Z").replace(" ", "T");
+  const d = new Date(normalized);
+  if (Number.isNaN(d.getTime())) return null;
+  const diffMs = Date.now() - d.getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d ago`;
+  return formatDate(iso);
+}
+
 interface PastRunsViewProps {
   runs: RunsPayload | null;
   activeRun: string | null;
   onSelectRun: (name: string) => void;
-  onVerifyClick: () => void;
+  onVerified: () => void;
 }
 
 export default function PastRunsView({
   runs,
   activeRun,
   onSelectRun,
-  onVerifyClick,
+  onVerified,
 }: PastRunsViewProps) {
   const count = runs?.count ?? 0;
+  const [showVerify, setShowVerify] = useState(false);
 
   if (!runs || runs.locked) {
     return (
@@ -73,12 +98,24 @@ export default function PastRunsView({
         <p className="mx-auto mt-1.5 max-w-md text-sm text-[#888]">
           You have {count} past {count === 1 ? "run" : "runs"} on this machine.
         </p>
-        <button
-          onClick={onVerifyClick}
-          className="mt-4 cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
-        >
-          View runs
-        </button>
+        {showVerify ? (
+          <>
+            <p className="mx-auto mt-3 max-w-sm text-xs text-[#666]">
+              Verify your email with a one-time code to unlock the full history.
+            </p>
+            <EmailVerifyInline onVerified={onVerified} />
+          </>
+        ) : (
+          <button
+            onClick={() => {
+              trackCta("history_unlock", "past_runs");
+              setShowVerify(true);
+            }}
+            className="mt-4 cursor-pointer rounded-lg bg-white px-4 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
+          >
+            View runs
+          </button>
+        )}
         <p className="mt-4 flex items-center justify-center gap-1.5 text-xs text-[#555]">
           <Terminal className="h-3.5 w-3.5" aria-hidden="true" />
           Or open one from the CLI with{" "}
@@ -100,7 +137,8 @@ export default function PastRunsView({
     <div className="space-y-2">
       {runs.runs.map((run: RunListEntry) => {
         const active = run.name === activeRun;
-        const date = formatDate(run.start_time) ?? formatDate(run.end_time);
+        const date = formatTimeAgo(run.start_time) ?? formatTimeAgo(run.end_time);
+        const title = runTitle(run.target, run.name);
         return (
           <button
             key={run.name}
@@ -113,7 +151,7 @@ export default function PastRunsView({
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
-                <span className="truncate text-sm font-medium text-white">{run.name}</span>
+                <span className="truncate text-sm font-medium text-white">{title}</span>
                 {active && (
                   <span className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-400" style={{ border: "1px solid rgba(16,185,129,0.3)" }}>
                     Active
@@ -121,12 +159,10 @@ export default function PastRunsView({
                 )}
               </div>
               <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-[#666]">
-                {run.target && <span className="truncate font-mono text-[#888]">{run.target}</span>}
-                {run.target && (run.scan_mode || date || run.status) && <span className="text-[#333]">·</span>}
                 {run.scan_mode && <span className="capitalize">{run.scan_mode}</span>}
-                {date && <span className="text-[#333]">·</span>}
+                {run.scan_mode && (date || run.status) && <span className="text-[#333]">·</span>}
                 {date && <span>{date}</span>}
-                {run.status && <span className="text-[#333]">·</span>}
+                {date && run.status && <span className="text-[#333]">·</span>}
                 {run.status && <span className="capitalize">{run.status}</span>}
               </div>
             </div>

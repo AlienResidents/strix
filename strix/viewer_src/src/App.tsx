@@ -39,6 +39,7 @@ import {
   type RunsPayload,
 } from "@/data/serverSource";
 import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
+import { runTitle } from "@/lib/target-utils";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
 import EmailReportView from "@/components/EmailReportView";
@@ -175,43 +176,73 @@ export default function App() {
   const agentCount = run?.transcript.agents.length ?? 0;
   const verified = auth?.verified === true;
 
+  // Per-run guard for the default view: land on Agents while a scan is live,
+  // Overview once it finishes. Applied at most once per run and never once the
+  // user has navigated manually (userSetView flips the guard).
+  const initialViewAppliedRef = useRef(false);
+
+  // Reset the guard whenever the active run changes so the newly selected run
+  // gets its own default.
+  useEffect(() => {
+    initialViewAppliedRef.current = false;
+  }, [activeRun]);
+
+  useEffect(() => {
+    if (initialViewAppliedRef.current || !run) return;
+    if (run.finished) {
+      initialViewAppliedRef.current = true;
+      setView("overview");
+    } else if (agentCount > 0) {
+      // Live and agents have appeared: default to the agent graph. If it is
+      // live but no agents exist yet, wait (do not apply, do not set the flag).
+      initialViewAppliedRef.current = true;
+      setView("agents");
+    }
+  }, [run, agentCount]);
+
+  // User-initiated navigation: mark the default guard applied so the per-run
+  // default effect never yanks the user off the view they chose.
+  const userSetView = useCallback((v: View) => {
+    initialViewAppliedRef.current = true;
+    setView(v);
+  }, []);
+
   const selectRun = useCallback((name: string) => {
     setActiveRun(name);
     setSelectedId(null);
     setRun(null);
     setError(null);
-    setView("overview");
+    // Reset the guard so the per-run default applies to the newly selected run.
+    initialViewAppliedRef.current = false;
   }, []);
 
   const goEmail = useCallback((skipDisclosure: boolean, surface: string) => {
     trackCta("email_report", surface);
     setEmailPurpose("report");
     setEmailSkipDisclosure(skipDisclosure);
-    setView("email");
-  }, []);
+    userSetView("email");
+  }, [userSetView]);
 
   // Sidebar entry keeps the disclosure (first place those users see it);
   const openEmail = useCallback(() => goEmail(false, "sidebar"), [goEmail]);
   // the Overview CTA already states the tradeoff, so it starts the flow directly.
   const openEmailFromOverview = useCallback(() => goEmail(true, "overview"), [goEmail]);
 
-  const openVerify = useCallback(() => {
-    trackCta("history_unlock", "past_runs");
-    setEmailPurpose("verify");
-    setEmailSkipDisclosure(false);
-    setView("email");
-  }, []);
-
   const openHistory = useCallback(() => {
     void refreshRuns();
-    setView("history");
-  }, [refreshRuns]);
+    userSetView("history");
+  }, [refreshRuns, userSetView]);
+
+  const onPastRunsVerified = useCallback(async () => {
+    await refreshAuth();
+    await refreshRuns();
+  }, [refreshAuth, refreshRuns]);
 
   const selectFeature = useCallback((slug: string) => {
     trackCta(slug, "sidebar_nav");
     setActiveFeature(slug);
-    setView("feature");
-  }, []);
+    userSetView("feature");
+  }, [userSetView]);
 
   const onForget = useCallback(async () => {
     await forgetAuth();
@@ -225,7 +256,7 @@ export default function App() {
         view={view}
         onSelectView={(v) => {
           if (v === "history") openHistory();
-          else setView(v);
+          else userSetView(v);
         }}
         activeFeature={activeFeature}
         onSelectFeature={selectFeature}
@@ -261,7 +292,7 @@ export default function App() {
                 <RunSwitcher
                   runs={runs}
                   activeRun={activeRun}
-                  launchedName={run?.summary.runName ?? run?.summary.runId ?? "Current run"}
+                  launchedName={runTitle(run?.summary.targets[0] ?? null, run?.summary.runName ?? run?.summary.runId ?? "Current run")}
                   onSelect={selectRun}
                 />
               )}
@@ -319,7 +350,7 @@ export default function App() {
                 runs={runs}
                 activeRun={activeRun}
                 onSelectRun={selectRun}
-                onVerifyClick={openVerify}
+                onVerified={() => void onPastRunsVerified()}
               />
             </div>
           ) : !run && !error ? (
@@ -333,14 +364,14 @@ export default function App() {
 
               {/* Tab strip: shown on small screens where the sidebar is hidden. */}
               <div className="flex gap-5 border-b border-[#2a2a2a] lg:hidden">
-                <TabButton active={view === "overview"} onClick={() => setView("overview")}>
+                <TabButton active={view === "overview"} onClick={() => userSetView("overview")}>
                   Overview
                 </TabButton>
-                <TabButton active={view === "issues"} onClick={() => setView("issues")}>
+                <TabButton active={view === "issues"} onClick={() => userSetView("issues")}>
                   Issues{run.vulnerabilities.length > 0 ? ` (${run.vulnerabilities.length})` : ""}
                 </TabButton>
                 {agentCount > 0 && (
-                  <TabButton active={view === "agents"} onClick={() => setView("agents")}>
+                  <TabButton active={view === "agents"} onClick={() => userSetView("agents")}>
                     Agents ({agentCount})
                   </TabButton>
                 )}
@@ -393,7 +424,8 @@ function RunSwitcher({
   onSelect: (name: string) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const current = activeRun ?? launchedName;
+  const activeEntry = runs.runs.find((r) => r.name === activeRun);
+  const current = activeEntry ? runTitle(activeEntry.target, activeEntry.name) : launchedName;
   return (
     <div className="relative">
       <button
@@ -422,7 +454,7 @@ function RunSwitcher({
                 }`}
               >
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate">{r.name}</span>
+                  <span className="block truncate">{runTitle(r.target, r.name)}</span>
                   {r.target && <span className="block truncate font-mono text-[#666]">{r.target}</span>}
                 </span>
                 {active && <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-emerald-400" />}
@@ -469,7 +501,7 @@ function SummaryHeader({ summary }: { summary: ParsedRunSummary }) {
   return (
     <div>
       <h1 className="text-2xl font-semibold text-white">
-        {summary.runName ?? summary.runId ?? "Scan results"}
+        {runTitle(summary.targets[0] ?? null, summary.runName ?? summary.runId ?? "Scan results")}
       </h1>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-[#888]">
         {summary.targets.length > 0 && (
