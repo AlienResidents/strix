@@ -273,11 +273,13 @@ export default function App() {
         </div>
 
         <div className="max-w-[72rem] mx-auto px-6 py-8 space-y-6">
-          {/* Trust banner */}
-          <div className="rounded-lg px-4 py-3 flex gap-3 items-start" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
-            <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" aria-hidden="true" />
-            <p className="text-sm text-[#aaa] leading-relaxed">{TRUST_BANNER}</p>
-          </div>
+          {/* Trust banner (not on the Pro feature upsell pages) */}
+          {view !== "feature" && (
+            <div className="rounded-lg px-4 py-3 flex gap-3 items-start" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
+              <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" aria-hidden="true" />
+              <p className="text-sm text-[#aaa] leading-relaxed">{TRUST_BANNER}</p>
+            </div>
+          )}
 
           {error && !run && view !== "history" && (
             <div className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
