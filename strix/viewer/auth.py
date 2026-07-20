@@ -61,8 +61,9 @@ def read_auth() -> dict[str, Any] | None:
 def _expiry(record: dict[str, Any]) -> datetime | None:
     """Parse ``verified_at`` (the relay's ``expires_at``) into an aware UTC datetime.
 
-    Returns None when it is absent or unparseable, in which case expiry cannot be
-    enforced locally (the relay still rejects an expired token on report send).
+    Returns None when it is absent or unparseable. The local gate fails closed on
+    such records (see ``is_verified``), matching the relay, which rejects a token
+    with no valid expiry on report send.
     """
     raw = record.get("verified_at")
     if not isinstance(raw, str) or not raw:
@@ -75,17 +76,19 @@ def _expiry(record: dict[str, Any]) -> datetime | None:
 
 
 def is_verified() -> bool:
-    """True when a usable, unexpired email + token record exists locally.
+    """True when a usable email + token record with a valid future expiry exists.
 
     The expiry returned by OTP verification is enforced here so history stops
-    unlocking once the token lapses, keeping the local gate in step with the
-    relay (which rejects an expired token on report send).
+    unlocking once the token lapses. It fails closed: a record whose expiry is
+    absent, blank, or unparseable requires re-verification rather than unlocking
+    forever, keeping the local gate in step with the relay (which rejects an
+    expired token on report send).
     """
     record = read_auth()
     if record is None:
         return False
     expiry = _expiry(record)
-    return expiry is None or expiry > datetime.now(UTC)
+    return expiry is not None and expiry > datetime.now(UTC)
 
 
 def write_auth(email: str, token: str, verified_at: str) -> None:

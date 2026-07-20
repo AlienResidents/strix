@@ -56,14 +56,15 @@ def test_is_verified_enforces_expiry() -> None:
     assert auth.is_verified() is True
 
 
-def test_is_verified_when_expiry_absent_or_unparseable() -> None:
-    # No/blank expiry: cannot enforce locally, so treat as valid.
+def test_is_verified_fails_closed_when_expiry_absent_or_unparseable() -> None:
+    # No/blank expiry: fail closed rather than unlocking history forever.
     auth.write_auth(email="a@b.com", token="t", verified_at="")
-    assert auth.is_verified() is True
+    assert auth.read_auth() is not None
+    assert auth.is_verified() is False
 
-    # Garbage expiry is ignored rather than locking the user out.
+    # Garbage expiry likewise requires re-verification.
     auth.write_auth(email="a@b.com", token="t", verified_at="not-a-date")
-    assert auth.is_verified() is True
+    assert auth.is_verified() is False
 
 
 def test_write_auth_is_0600() -> None:
