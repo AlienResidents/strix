@@ -168,10 +168,13 @@ def _styles() -> dict[str, ParagraphStyle]:
     styles["meta_inline"] = ParagraphStyle(
         "MetaInline", fontName=_SANS, fontSize=9, leading=13, textColor=_MUTED, spaceBefore=4
     )
+    # spaceBefore/spaceAfter must exceed borderPadding: reportlab does not reserve
+    # a bordered paragraph's top padding, so too small a gap lets the background
+    # box bleed up over the field label above it.
     styles["code"] = ParagraphStyle(
         "Code", fontName=_MONO, fontSize=8, leading=11, textColor=_TEXT,
         backColor=_LIGHT_BG, borderColor=_BORDER, borderWidth=0.5, borderPadding=8,
-        leftIndent=2, spaceBefore=2,
+        spaceBefore=12, spaceAfter=12,
     )
     styles["count"] = ParagraphStyle(
         "Count", fontName=_SANS_BOLD, fontSize=30, leading=32, alignment=TA_CENTER
