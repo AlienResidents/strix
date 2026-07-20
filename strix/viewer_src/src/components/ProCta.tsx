@@ -103,12 +103,30 @@ export function ProNavItem({
   feature,
   active,
   onClick,
+  collapsed = false,
 }: {
   feature: ProFeature;
   active?: boolean;
   onClick: () => void;
+  collapsed?: boolean;
 }) {
   const Icon = feature.icon;
+  if (collapsed) {
+    return (
+      <button
+        onClick={onClick}
+        title={`${feature.title} (${feature.tier})`}
+        className={`group flex w-full cursor-pointer items-center justify-center rounded-md px-2.5 py-2 transition-colors ${
+          active
+            ? "text-white"
+            : "text-[#888] hover:bg-[rgba(255,255,255,0.06)] hover:text-white"
+        }`}
+        style={active ? { background: "rgba(255,255,255,0.12)" } : undefined}
+      >
+        <Icon className="h-4 w-4 flex-shrink-0" aria-hidden="true" />
+      </button>
+    );
+  }
   return (
     <button
       onClick={onClick}
