@@ -17,6 +17,26 @@ logger = logging.getLogger(__name__)
 
 _TERMINAL_STATUSES = {"completed", "stopped", "failed", "interrupted"}
 
+_KNOWN_SEVERITIES = ("critical", "high", "medium", "low")
+
+
+def severity_counts(vulns: list[Any]) -> dict[str, int]:
+    """Bucket vulnerabilities into critical/high/medium/low counts.
+
+    Mirrors the SPA's ``severityCounts``: severities are lowercased and
+    trimmed, and anything outside the four known buckets (``info``,
+    ``informational``, ``unknown``, missing, ...) folds into ``low`` so the
+    shared UI renders cleanly.
+    """
+    counts = dict.fromkeys(_KNOWN_SEVERITIES, 0)
+    for vuln in vulns:
+        raw = vuln.get("severity") if isinstance(vuln, dict) else None
+        severity = str(raw or "").lower().strip()
+        if severity not in counts:
+            severity = "low"
+        counts[severity] += 1
+    return counts
+
 
 def build_run_state(run_dir: Path) -> dict[str, Any]:
     """Agent graph + full per-agent event/message stream.
@@ -40,6 +60,18 @@ def read_run_summary(run_dir: Path) -> dict[str, Any]:
     status = record.get("status")
     finished = status in _TERMINAL_STATUSES and bool(record.get("end_time"))
     return {**record, "finished": finished}
+
+
+def primary_target(record: dict[str, Any]) -> str | None:
+    """The first target's original string from a run record, or None."""
+    targets = record.get("targets_info")
+    if isinstance(targets, list):
+        for entry in targets:
+            if isinstance(entry, dict):
+                original = entry.get("original")
+                if isinstance(original, str) and original:
+                    return original
+    return None
 
 
 def read_vulnerabilities(run_dir: Path) -> list[Any]:
@@ -66,7 +98,9 @@ def _load_json(path: Path, *, default: Any) -> Any:
 
 __all__ = [
     "build_run_state",
+    "primary_target",
     "read_report_markdown",
     "read_run_summary",
     "read_vulnerabilities",
+    "severity_counts",
 ]
