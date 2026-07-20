@@ -93,25 +93,31 @@ export function ProTile({ item }: { item: ProItem }) {
 }
 
 /**
- * Sidebar-row Pro item: icon + label + Pro tag, with the one-liner as a hover
- * tooltip. Link-out to sign-up in a new tab.
+ * Sidebar-row Pro item: icon + label + Pro tag, with the one-liner shown as
+ * always-visible secondary text under the title. Link-out to sign-up in a new
+ * tab.
  */
 export function ProNavItem({ item }: { item: ProItem }) {
   const Icon = item.icon;
   return (
-    <Tooltip text={item.desc} className="w-full">
-      <a
-        href={SIGNUP_URL}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={() => trackCta(item.slug)}
-        className="group flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-sm text-[#888] transition-colors hover:bg-[rgba(255,255,255,0.06)] hover:text-white"
-      >
-        <Icon className="h-4 w-4 flex-shrink-0 text-[#666] transition-colors group-hover:text-[#aaa]" aria-hidden="true" />
-        <span className="flex-1 truncate">{item.title}</span>
-        <ProTag />
-      </a>
-    </Tooltip>
+    <a
+      href={SIGNUP_URL}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={() => trackCta(item.slug)}
+      className="group flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 transition-colors hover:bg-[rgba(255,255,255,0.06)]"
+    >
+      <Icon className="mt-0.5 h-4 w-4 flex-shrink-0 text-[#666] transition-colors group-hover:text-[#aaa]" aria-hidden="true" />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-1.5">
+          <span className="flex-1 truncate text-sm text-[#aaa] transition-colors group-hover:text-white">
+            {item.title}
+          </span>
+          <ProTag />
+        </span>
+        <span className="mt-0.5 block text-[11px] leading-snug text-[#666]">{item.desc}</span>
+      </span>
+    </a>
   );
 }
 

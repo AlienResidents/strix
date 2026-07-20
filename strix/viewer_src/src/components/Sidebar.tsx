@@ -34,8 +34,8 @@ import type { View } from "@/App";
 // Integrations, Members), then the rest of the platform surface.
 const PLATFORM_ITEMS: ProItem[] = [
   { title: "PR Reviews", desc: "Pentest every pull request your team opens.", slug: "pr_reviews", icon: GitPullRequest },
-  { title: "Repositories", desc: "Connect your org's repositories and domains.", slug: "repositories", icon: Layers },
-  { title: "Domains", desc: "Connect your org's repositories and domains.", slug: "domains", icon: Globe },
+  { title: "Repositories", desc: "Connect your org's repositories.", slug: "repositories", icon: Layers },
+  { title: "Domains", desc: "Add the domains your team owns.", slug: "domains", icon: Globe },
   { title: "Integrations", desc: "Two-way sync findings to Jira, Linear, and Slack.", slug: "integrations", icon: Puzzle },
   { title: "Members", desc: "Invite your team and set roles.", slug: "members", icon: Users },
   { title: "Pentests", desc: "Launch deeper pentests on managed infra.", slug: "pentests", icon: Search },
@@ -72,7 +72,7 @@ export default function Sidebar({
   onForget,
 }: SidebarProps) {
   return (
-    <aside className="hidden w-60 flex-shrink-0 border-r border-[#222] lg:block">
+    <aside className="hidden w-72 flex-shrink-0 border-r border-[#222] lg:block">
       <div className="sticky top-0 flex h-screen flex-col overflow-y-auto px-3 py-4">
         {/* Header: wordmark + Start free + signed-in chip */}
         <div className="px-1.5">
