@@ -14,6 +14,7 @@ the user's own hands. Strix cannot read the delivered report.
 from __future__ import annotations
 
 import html
+import re
 import secrets
 from datetime import datetime
 from io import BytesIO
@@ -154,7 +155,15 @@ def _styles() -> dict[str, ParagraphStyle]:
         spaceBefore=10, spaceAfter=2,
     )
     styles["body"] = ParagraphStyle(
-        "Body", fontName=_SANS, fontSize=10, leading=15, textColor=_TEXT
+        "Body", fontName=_SANS, fontSize=10, leading=15, textColor=_TEXT, spaceAfter=8
+    )
+    styles["md_heading"] = ParagraphStyle(
+        "MdHeading", fontName=_SANS_BOLD, fontSize=11, leading=15, textColor=_INK,
+        spaceBefore=10, spaceAfter=4,
+    )
+    styles["bullet"] = ParagraphStyle(
+        "Bullet", fontName=_SANS, fontSize=10, leading=15, textColor=_TEXT,
+        leftIndent=16, firstLineIndent=-11, spaceAfter=3,
     )
     styles["meta_inline"] = ParagraphStyle(
         "MetaInline", fontName=_SANS, fontSize=9, leading=13, textColor=_MUTED, spaceBefore=4
@@ -352,15 +361,115 @@ def _cover(
     ]
 
 
+def _inline_md(text: str) -> str:
+    """Convert inline markdown (bold, italic, `code`) to reportlab markup.
+
+    Code spans are stashed as placeholders before bold/italic run, so bold that
+    wraps a code span (``**`x`**``) works and code contents are never mangled.
+    """
+    codes: list[str] = []
+
+    def _stash(match: re.Match[str]) -> str:
+        codes.append(match.group(1))
+        return f"\x00{len(codes) - 1}\x00"
+
+    seg = html.escape(re.sub(r"`([^`]+)`", _stash, text))
+    seg = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", seg)
+    seg = re.sub(r"__(.+?)__", r"<b>\1</b>", seg)
+    seg = re.sub(r"\*(.+?)\*", r"<i>\1</i>", seg)
+
+    def _restore(match: re.Match[str]) -> str:
+        inner = html.escape(codes[int(match.group(1))])
+        return f'<font face="{_MONO}" color="#b31d28">{inner}</font>'
+
+    return re.sub(r"\x00(\d+)\x00", _restore, seg)
+
+
+def _strip_leading_heading(md: str) -> str:
+    """Drop a single leading markdown heading (each section adds its own title)."""
+    lines = md.lstrip("\n").split("\n")
+    if lines and re.match(r"^#{1,6}\s+", lines[0].strip()):
+        return "\n".join(lines[1:]).lstrip("\n")
+    return md
+
+
+def _markdown_flowables(  # noqa: PLR0915 - cohesive block parser, splitting hurts clarity
+    md: str, styles: dict[str, ParagraphStyle]
+) -> list[Flowable]:
+    """Render a markdown block (headings, lists, fenced code, prose) to flowables."""
+    flow: list[Flowable] = []
+    para: list[str] = []
+    bullets: list[tuple[str, str]] = []
+
+    def flush_para() -> None:
+        if para:
+            flow.append(Paragraph(_inline_md(" ".join(para)), styles["body"]))
+            para.clear()
+
+    def flush_bullets() -> None:
+        for marker, item in bullets:
+            flow.append(Paragraph(f"{marker}&nbsp;{_inline_md(item)}", styles["bullet"]))
+        bullets.clear()
+
+    lines = md.replace("\r\n", "\n").split("\n")
+    i = 0
+    while i < len(lines):
+        stripped = lines[i].strip()
+        if stripped.startswith("```"):
+            flush_para()
+            flush_bullets()
+            i += 1
+            code: list[str] = []
+            while i < len(lines) and not lines[i].strip().startswith("```"):
+                code.append(lines[i])
+                i += 1
+            i += 1  # closing fence
+            flow.append(Paragraph(_esc("\n".join(code)) or "&nbsp;", styles["code"]))
+            continue
+        if not stripped:
+            flush_para()
+            flush_bullets()
+            i += 1
+            continue
+        heading = re.match(r"^(#{1,6})\s+(.*)$", stripped)
+        if heading:
+            flush_para()
+            flush_bullets()
+            flow.append(Paragraph(_inline_md(heading.group(2)), styles["md_heading"]))
+            i += 1
+            continue
+        ordered = re.match(r"^(\d+)\.\s+(.*)$", stripped)
+        unordered = re.match(r"^[-*+]\s+(.*)$", stripped)
+        if ordered:
+            flush_para()
+            bullets.append((f"{ordered.group(1)}.", ordered.group(2)))
+            i += 1
+            continue
+        if unordered:
+            flush_para()
+            bullets.append(("•", unordered.group(1)))
+            i += 1
+            continue
+        flush_bullets()
+        para.append(stripped)
+        i += 1
+
+    flush_para()
+    flush_bullets()
+    return flow
+
+
 def _field_block(
     styles: dict[str, ParagraphStyle], label: str, value: Any, *, code: bool = False
 ) -> list[Flowable]:
     if value is None or (isinstance(value, str) and not value.strip()):
         return []
-    return [
-        Paragraph(label.upper(), styles["field_label"]),
-        Paragraph(_esc(value), styles["code"] if code else styles["body"]),
-    ]
+    flow: list[Flowable] = [Paragraph(label.upper(), styles["field_label"])]
+    if code:
+        flow.append(Paragraph(_esc(value), styles["code"]))
+    else:
+        flow.extend(_markdown_flowables(str(value), styles))
+    return flow
 
 
 def _finding_flowables(
@@ -403,6 +512,37 @@ def _finding_flowables(
     return story
 
 
+def _overview_flowables(
+    styles: dict[str, ParagraphStyle], record: dict[str, Any], total: int, counts: dict[str, int]
+) -> list[Flowable]:
+    story: list[Flowable] = [
+        _section(styles, "Executive Summary"),
+        Spacer(1, 16),
+        _severity_grid(styles, counts),
+        Spacer(1, 10),
+        Paragraph(f"<b>{total}</b> total findings across this assessment.", styles["body"]),
+    ]
+    scan_results = record.get("scan_results")
+    if not isinstance(scan_results, dict):
+        return story
+    summary = scan_results.get("executive_summary")
+    if isinstance(summary, str) and summary.strip():
+        story.append(Spacer(1, 16))
+        story.extend(_markdown_flowables(_strip_leading_heading(summary), styles))
+    for label, key in (
+        ("Methodology", "methodology"),
+        ("Technical Analysis", "technical_analysis"),
+        ("Recommendations", "recommendations"),
+    ):
+        value = scan_results.get(key)
+        if isinstance(value, str) and value.strip():
+            story.append(Spacer(1, 20))
+            story.append(_section(styles, label))
+            story.append(Spacer(1, 12))
+            story.extend(_markdown_flowables(_strip_leading_heading(value), styles))
+    return story
+
+
 def generate_report_pdf(run_dir: Path) -> bytes:
     """Render a branded, full-detail PDF report for the run at ``run_dir``."""
     record = read_run_summary(run_dir)
@@ -425,35 +565,8 @@ def generate_report_pdf(run_dir: Path) -> bytes:
 
     story: list[Flowable] = []
     story.extend(_cover(styles, record, run_name))
+    story.extend(_overview_flowables(styles, record, len(vulns), counts))
 
-    # Executive summary + severity grid.
-    story.append(_section(styles, "Executive Summary"))
-    story.append(Spacer(1, 16))
-    story.append(_severity_grid(styles, counts))
-    story.append(Spacer(1, 10))
-    story.append(
-        Paragraph(f"<b>{len(vulns)}</b> total findings across this assessment.", styles["body"])
-    )
-
-    scan_results = record.get("scan_results")
-    if isinstance(scan_results, dict):
-        summary = scan_results.get("executive_summary")
-        if isinstance(summary, str) and summary.strip():
-            story.append(Spacer(1, 16))
-            story.append(Paragraph(_esc(summary), styles["body"]))
-        for label, key in (
-            ("Methodology", "methodology"),
-            ("Technical Analysis", "technical_analysis"),
-            ("Recommendations", "recommendations"),
-        ):
-            value = scan_results.get(key)
-            if isinstance(value, str) and value.strip():
-                story.append(Spacer(1, 20))
-                story.append(_section(styles, label))
-                story.append(Spacer(1, 12))
-                story.append(Paragraph(_esc(value), styles["body"]))
-
-    # Findings.
     story.append(PageBreak())
     story.append(_section(styles, "Findings"))
     story.append(Spacer(1, 16))
