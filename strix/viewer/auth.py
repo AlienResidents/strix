@@ -123,12 +123,16 @@ def _parse_body(raw: bytes) -> dict[str, Any]:
 
 def otp_start(email: str) -> None:
     """Ask the relay to email a verification code. Raises RelayError on failure."""
-    status, _ = _post_json("/api/oss/otp/start", {"email": email}, timeout=_OTP_TIMEOUT)
+    status, data = _post_json("/api/oss/otp/start", {"email": email}, timeout=_OTP_TIMEOUT)
     if status == 200:
         return
     if status == 429:
         raise RelayError("rate_limited")
     if status == 400:
+        # The relay uses 400 both for a malformed address and, separately, to
+        # reject a free/personal email domain (it wants a work email).
+        if data.get("error") == "work_email_required":
+            raise RelayError("work_email_required")
         raise RelayError("invalid_email")
     raise RelayError("unavailable")
 

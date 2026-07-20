@@ -284,6 +284,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             status_by_code = {
                 "rate_limited": HTTPStatus.TOO_MANY_REQUESTS,
                 "invalid_email": HTTPStatus.BAD_REQUEST,
+                "work_email_required": HTTPStatus.BAD_REQUEST,
                 "invalid_code": HTTPStatus.FORBIDDEN,
                 "reverify": HTTPStatus.UNAUTHORIZED,
                 "forbidden": HTTPStatus.FORBIDDEN,
