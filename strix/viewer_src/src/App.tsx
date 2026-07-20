@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  ShieldCheck,
   ArrowLeft,
   AlertCircle,
   Waypoints,
@@ -44,6 +43,8 @@ import { runTitle } from "@/lib/target-utils";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
 import EmailReportView from "@/components/EmailReportView";
+import { RunDetails } from "@/components/RunDetails";
+import { TrustToast } from "@/components/TrustToast";
 import FeatureDetail from "@/components/FeatureDetail";
 import { ProTile, ProInlineCta, type ProItem } from "@/components/ProCta";
 import { FEATURES } from "@/lib/pro-features";
@@ -321,14 +322,6 @@ export default function App() {
         </div>
 
         <div className="max-w-[72rem] mx-auto px-6 py-8 space-y-6">
-          {/* Trust banner (not on the Pro feature or email pages) */}
-          {view !== "feature" && view !== "email" && (
-            <div className="rounded-lg px-4 py-3 flex gap-3 items-start" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
-              <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" aria-hidden="true" />
-              <p className="text-sm text-[#aaa] leading-relaxed">{TRUST_BANNER}</p>
-            </div>
-          )}
-
           {error && !run && view !== "history" && view !== "email" && view !== "feature" && (
             <div className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />
@@ -393,6 +386,7 @@ export default function App() {
                   counts={counts}
                   total={run.vulnerabilities.length}
                   reportMarkdown={run.reportMarkdown}
+                  raw={run.raw}
                   onOpenEmail={openEmailFromOverview}
                 />
               ) : view === "agents" && agentCount > 0 ? (
@@ -418,6 +412,7 @@ export default function App() {
           ) : null}
         </div>
       </div>
+      <TrustToast message={TRUST_BANNER} />
     </div>
   );
 }
@@ -651,12 +646,14 @@ function OverviewTab({
   counts,
   total,
   reportMarkdown,
+  raw,
   onOpenEmail,
 }: {
   summary: ParsedRunSummary;
   counts: Record<VulnerabilitySeverity, number>;
   total: number;
   reportMarkdown: string | null;
+  raw: Record<string, unknown>;
   onOpenEmail: () => void;
 }) {
   const sections = (
@@ -672,6 +669,8 @@ function OverviewTab({
 
   return (
     <div className="space-y-6">
+      <RunDetails raw={raw} durationSeconds={summary.durationSeconds} />
+
       {total > 0 && (
         <div className="rounded-xl border border-[#222] bg-[rgba(255,255,255,0.02)] p-5">
           <IssueSeveritySummary findings={{ total, ...counts }} />
