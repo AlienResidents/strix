@@ -76,17 +76,46 @@ function eventSeq(id: string): number {
   return m ? parseInt(m[1], 10) : 0;
 }
 
-/**
- * The SDK session we reconstruct includes each agent's incoming "user" messages:
- * the subagent spawn prompt ("== Inherited context from parent =="), inter-agent
- * message deliveries, and other large blobs. The cloud app never renders these
- * as chat bubbles (its timeline is assistant "thinking" + tool executions, and
- * inter-agent messages surface through the tool renderers). Mirror that: keep
- * assistant messages and tool calls, drop incoming user/human messages.
- */
-function isIncomingUserChat(event: TranscriptEvent): boolean {
+/** A chat event whose author is the human/user (vs an assistant "thinking"). */
+function isUserChat(event: TranscriptEvent): boolean {
   const role = event.data?.role;
   return event.type === "chat" && (role === "user" || role === "human");
+}
+
+/**
+ * Inter-agent message deliveries land in the recipient's session as user-role
+ * items prefixed with a header (see the engine's message formatter). They are
+ * already represented via the sending agent's tool renderer, so we never render
+ * them as chat bubbles here.
+ */
+function isInterAgentDelivery(event: TranscriptEvent): boolean {
+  return isUserChat(event) && String(event.data?.content ?? "").startsWith("[Message from ");
+}
+
+/**
+ * The reconstructed SDK session records every incoming user-role item for an
+ * agent: its initial input (the root's assembled brief, or a subagent's spawn /
+ * inherited-context prompt), inter-agent deliveries, AND genuine human steering
+ * messages sent live from the viewer or TUI. We only want the last group. Given
+ * an agent's events in order, hide the first user message (its initial input)
+ * and every inter-agent delivery; keep the rest, which are the human's live
+ * instructions, rendered as "User" bubbles.
+ */
+function hiddenUserEventIds(agentEventsInOrder: TranscriptEvent[]): Set<string> {
+  const hidden = new Set<string>();
+  let sawInitialInput = false;
+  for (const e of agentEventsInOrder) {
+    if (!isUserChat(e)) continue;
+    if (isInterAgentDelivery(e)) {
+      hidden.add(e.id);
+      continue;
+    }
+    if (!sawInitialInput) {
+      sawInitialInput = true;
+      hidden.add(e.id);
+    }
+  }
+  return hidden;
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -140,8 +169,8 @@ export function buildGraphAgents(
         const task = (args.task as string) ?? "";
         if (name && task) taskByName.set(name, task);
       }
-    } else if (!isIncomingUserChat(e)) {
-      // Count only assistant messages, matching what the transcript renders.
+    } else if (!isUserChat(e)) {
+      // Count only assistant messages for the graph node subtitle.
       messageCount.set(e.agent_id, (messageCount.get(e.agent_id) ?? 0) + 1);
     }
   }
@@ -173,13 +202,13 @@ export function AgentTranscript({
   events: TranscriptEvent[];
   showHeader?: boolean;
 }) {
-  const mine = useMemo(
-    () =>
-      events
-        .filter((e) => e.agent_id === agent.id && !isIncomingUserChat(e))
-        .sort((a, b) => eventSeq(a.id) - eventSeq(b.id)),
-    [events, agent.id]
-  );
+  const mine = useMemo(() => {
+    const ordered = events
+      .filter((e) => e.agent_id === agent.id)
+      .sort((a, b) => eventSeq(a.id) - eventSeq(b.id));
+    const hidden = hiddenUserEventIds(ordered);
+    return ordered.filter((e) => !hidden.has(e.id));
+  }, [events, agent.id]);
 
   const toolCount = mine.filter((e) => e.type === "tool").length;
   const msgCount = mine.length - toolCount;
