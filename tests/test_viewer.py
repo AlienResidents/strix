@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING
 
@@ -18,6 +19,7 @@ from strix.viewer.transcript import (
 
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
     from pathlib import Path
 
     import pytest
@@ -89,9 +91,7 @@ def _get(url: str) -> tuple[int, str, bytes]:
         return resp.status, resp.headers.get("Content-Type", ""), resp.read()
 
 
-def test_server_serves_api_and_static(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_server_serves_api_and_static(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _make_run(tmp_path, "served", status="completed", end_time="2026-01-01T00:00:00Z")
 
     assets = tmp_path / "bundle"
@@ -100,7 +100,7 @@ def test_server_serves_api_and_static(
     (assets / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
     monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
 
-    httpd, url = serve(run_dir, open_browser=False)
+    httpd, url, _ = serve(run_dir, open_browser=False)
     try:
         status, ctype, body = _get(f"{url}/api/run")
         assert status == 200
@@ -138,7 +138,7 @@ def test_server_event_endpoint_forwards_cta(
         lambda cta, surface=None: seen.append((cta, surface)),
     )
 
-    httpd, url = serve(run_dir, open_browser=False)
+    httpd, url, _ = serve(run_dir, open_browser=False)
     try:
         body = json.dumps(
             {"event": "cta_clicked", "cta": "PR reviews", "surface": "sidebar_nav"}
@@ -169,7 +169,7 @@ def test_server_event_endpoint_forwards_email_funnel(
         lambda step, purpose=None: seen.append((step, purpose)),
     )
 
-    httpd, url = serve(run_dir, open_browser=False)
+    httpd, url, _ = serve(run_dir, open_browser=False)
     try:
         # A whitelisted funnel event is forwarded; an unknown event is ignored.
         for payload, expected in (
@@ -189,9 +189,214 @@ def test_server_event_endpoint_forwards_email_funnel(
         httpd.server_close()
 
 
-def test_server_rejects_path_traversal(
+def _post(
+    url: str, path: str, payload: Mapping[str, object], *, cookie: str | None = None
+) -> tuple[int, bytes]:
+    headers = {"Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
+    req = urllib.request.Request(  # noqa: S310 - localhost test server
+        url + path, data=json.dumps(payload).encode(), headers=headers, method="POST"
+    )
+    try:
+        with urllib.request.urlopen(req) as resp:  # noqa: S310
+            return resp.status, resp.read()
+    except urllib.error.HTTPError as exc:
+        return exc.code, exc.read()
+
+
+def _session_cookie(url: str, token: str) -> str:
+    """Bootstrap a session via the tokened URL and return its ``name=value`` cookie."""
+    bootstrap = f"{url}/?token={token}"
+    with urllib.request.urlopen(bootstrap) as resp:  # noqa: S310 - localhost test server
+        raw = str(resp.headers.get("Set-Cookie", ""))
+    return raw.split(";", 1)[0]
+
+
+def _get_status(url: str) -> int:
+    try:
+        with urllib.request.urlopen(url) as resp:  # noqa: S310 - localhost test server
+            return int(resp.status)
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+
+
+def _bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    assets = tmp_path / "bundle"
+    assets.mkdir()
+    (assets / "index.html").write_text("<!doctype html><div id=root></div>", encoding="utf-8")
+    monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
+
+
+def test_capability_issued_only_for_tokened_bootstrap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    run_dir = _make_run(tmp_path, "cookie", status="running", end_time=None)
+    assets = tmp_path / "bundle"
+    (assets / "assets").mkdir(parents=True)
+    (assets / "index.html").write_text("<!doctype html>index", encoding="utf-8")
+    (assets / "assets" / "app.js").write_text("1", encoding="utf-8")
+    monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
+
+    httpd, url, token = serve(run_dir, open_browser=False)
+    try:
+        # A bare index load -- all a reachable client can do -- hands out nothing.
+        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310
+            assert resp.headers.get("Set-Cookie") is None
+
+        # A wrong token is likewise refused the capability.
+        with urllib.request.urlopen(f"{url}/?token=wrong") as resp:  # noqa: S310
+            assert resp.headers.get("Set-Cookie") is None
+
+        # Only the correct bootstrap token mints the session cookie.
+        with urllib.request.urlopen(f"{url}/?token={token}") as resp:  # noqa: S310
+            cookie = str(resp.headers.get("Set-Cookie", ""))
+        assert "strix_viewer_session=" in cookie
+        assert "HttpOnly" in cookie and "SameSite=Strict" in cookie
+
+        # Static assets never carry it.
+        with urllib.request.urlopen(url + "/assets/app.js") as resp:  # noqa: S310
+            assert resp.headers.get("Set-Cookie") is None
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_unauthorized_client_cannot_acquire_capability(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "exposed", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    delivered: list[tuple[str, str]] = []
+
+    def handler(agent_id: str, message: str) -> bool:
+        delivered.append((agent_id, message))
+        return True
+
+    httpd, url, _ = serve(run_dir, open_browser=False, steer_handler=handler)
+    try:
+        # A direct network client can reach the page but is handed no capability,
+        # so replaying an empty/guessed cookie cannot steer a live scan.
+        with urllib.request.urlopen(url + "/") as resp:  # noqa: S310
+            assert resp.headers.get("Set-Cookie") is None
+        status, _ = _post(
+            url,
+            "/api/agents/steer",
+            {"agent_id": "root", "message": "pwn"},
+            cookie="strix_viewer_session=",
+        )
+        assert status == 403
+        assert delivered == []
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_auth_status_reflects_expiry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _make_run(tmp_path, "status", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+    monkeypatch.setattr("strix.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"})
+    verified = {"value": True}
+    monkeypatch.setattr("strix.viewer.auth.is_verified", lambda: verified["value"])
+
+    httpd, url, _ = serve(run_dir, open_browser=False)
+    try:
+        _, _, body = _get(f"{url}/api/auth/status")
+        assert json.loads(body) == {"verified": True, "email": "a@b.com"}
+
+        # Once expired, status must advertise unverified so the SPA re-prompts.
+        verified["value"] = False
+        _, _, body = _get(f"{url}/api/auth/status")
+        assert json.loads(body)["verified"] is False
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_steer_requires_session_cookie(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_dir = _make_run(tmp_path, "steer", status="running", end_time=None)
+    _bundle(tmp_path, monkeypatch)
+
+    delivered: list[tuple[str, str]] = []
+
+    def handler(agent_id: str, message: str) -> bool:
+        delivered.append((agent_id, message))
+        return True
+
+    httpd, url, token = serve(run_dir, open_browser=False, steer_handler=handler)
+    try:
+        body = {"agent_id": "root", "message": "focus on auth"}
+        # No cookie: rejected before reaching the live coordinator.
+        status, _ = _post(url, "/api/agents/steer", body)
+        assert status == 403
+        assert delivered == []
+
+        # With the session cookie the message is delivered.
+        status, raw = _post(url, "/api/agents/steer", body, cookie=_session_cookie(url, token))
+        assert status == 200
+        assert json.loads(raw)["ok"] is True
+        assert delivered == [("root", "focus on auth")]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_report_send_requires_session_cookie(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "report", status="completed", end_time="2026-01-01T00:00:00Z")
+    _bundle(tmp_path, monkeypatch)
+
+    # A verified machine token exists, but that alone must not authorize a caller.
+    monkeypatch.setattr("strix.viewer.auth.read_auth", lambda: {"email": "a@b.com", "token": "t"})
+
+    httpd, url, token = serve(run_dir, open_browser=False)
+    try:
+        # No cookie: forbidden before the machine token is ever consulted.
+        status, _ = _post(url, "/api/report/send", {})
+        assert status == 403
+
+        # With the cookie the request clears the session gate; it then reaches
+        # the run resolver, so an unknown run is a 404 rather than a 403.
+        status, _ = _post(
+            url, "/api/report/send", {"run": "does-not-exist"}, cookie=_session_cookie(url, token)
+        )
+        assert status == 404
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_historical_run_data_requires_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    launched = _make_run(tmp_path, "launched", status="completed", end_time="2026-01-01T00:00:00Z")
+    _make_run(tmp_path, "other", status="completed", end_time="2026-01-01T00:00:00Z")
+    _bundle(tmp_path, monkeypatch)
+
+    verified = {"value": False}
+    monkeypatch.setattr("strix.viewer.auth.is_verified", lambda: verified["value"])
+
+    httpd, url, _ = serve(launched, open_browser=False)
+    try:
+        # The launched run is always viewable, no verification required.
+        status, _, _ = _get(f"{url}/api/run")
+        assert status == 200
+
+        # A different run's data is gated behind verification.
+        assert _get_status(f"{url}/api/run?run=other") == 401
+
+        # Once verified, the historical run resolves.
+        verified["value"] = True
+        status, _, _ = _get(f"{url}/api/run?run=other")
+        assert status == 200
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_server_rejects_path_traversal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _make_run(tmp_path, "guard", status="completed", end_time="2026-01-01T00:00:00Z")
     secret = tmp_path / "secret.txt"
     secret.write_text("top secret", encoding="utf-8")
@@ -201,7 +406,7 @@ def test_server_rejects_path_traversal(
     (assets / "index.html").write_text("<!doctype html>index", encoding="utf-8")
     monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
 
-    httpd, url = serve(run_dir, open_browser=False)
+    httpd, url, _ = serve(run_dir, open_browser=False)
     try:
         # A traversal target must never leak the file; it falls back to index.html.
         _, _, body = _get(f"{url}/..%2f..%2fsecret.txt")

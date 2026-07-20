@@ -981,11 +981,14 @@ def main() -> None:
     viewer_httpd = None
     web_url = None
     if not args.non_interactive and sys.stdout.isatty():
-        from strix.viewer.server import bundle_is_built, serve
+        from strix.viewer.server import authorized_url, bundle_is_built, serve
 
         if bundle_is_built():
             try:
-                viewer_httpd, web_url = serve(results_path, open_browser=False)
+                viewer_httpd, base_url, token = serve(results_path, open_browser=False)
+                # The completion panel's "View in web" link must authorize the
+                # browser, so hand it the tokened URL rather than the bare host.
+                web_url = authorized_url(base_url, token)
                 posthog.viewer_opened(source="post_scan", live=False)
             except Exception:
                 logger.debug("could not start local viewer", exc_info=True)

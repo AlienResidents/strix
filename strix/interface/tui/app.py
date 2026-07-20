@@ -1838,7 +1838,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 webbrowser.open(self._viewer_url)
             return
         try:
-            from strix.viewer.server import bundle_is_built, serve
+            from strix.viewer.server import authorized_url, bundle_is_built, serve
 
             if not bundle_is_built():
                 self._set_viewer_cta("[#eab308]Viewer UI not built[/]")
@@ -1856,14 +1856,16 @@ class StrixTUIApp(App):  # type: ignore[misc]
                     message=message,
                 )
 
-            httpd, url = serve(run_dir, open_browser=True, steer_handler=_viewer_steer)
+            httpd, url, token = serve(run_dir, open_browser=True, steer_handler=_viewer_steer)
         except Exception:
             logger.debug("failed to start local viewer", exc_info=True)
             self._set_viewer_cta("[red]Viewer failed to start[/]")
             return
         self._viewer_httpd = httpd
-        self._viewer_url = url
-        self._set_viewer_cta(self._viewer_cta_markup(url))
+        # Store the tokened URL so reopening the CTA re-authorizes the browser
+        # (this viewer carries a steer handler, so the session is required).
+        self._viewer_url = authorized_url(url, token)
+        self._set_viewer_cta(self._viewer_cta_markup(self._viewer_url))
 
         with contextlib.suppress(Exception):
             from strix.telemetry import posthog

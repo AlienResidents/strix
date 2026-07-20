@@ -17,13 +17,14 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import secrets
 import threading
 import webbrowser
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlencode, urlsplit
 
 from strix.core.paths import run_record_path
 from strix.viewer import auth
@@ -106,6 +107,10 @@ def resolve_run_dir(base_dir: Path, run_param: str | None, default_run_dir: Path
     return candidate
 
 
+# Name of the cookie carrying the per-process session capability.
+SESSION_COOKIE = "strix_viewer_session"
+
+
 class _ViewerState:
     def __init__(
         self,
@@ -122,6 +127,14 @@ class _ViewerState:
         # launcher), which can deliver a message to a running agent. Absent for
         # standalone ``strix view`` / finished runs, so steering is unavailable.
         self.steer_handler = steer_handler
+        # Unguessable per-process capability. It is minted here, printed/opened
+        # for the operator who started the server (see ``authorized_url``), and
+        # exchanged for a session cookie only when presented on the initial page
+        # load. It is the request-level authorization the review asked for:
+        # reachability of the port (e.g. when bound with ``--host``) is not
+        # enough to steer a live scan, trigger a report, or browse history --
+        # the token is never handed to a caller who merely reaches ``/``.
+        self.session_token = secrets.token_urlsafe(32)
 
 
 def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
@@ -138,7 +151,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 if path.startswith("/api/"):
                     self._handle_api(path, parse_qs(parts.query))
                 else:
-                    self._handle_static(path)
+                    self._handle_static(path, parse_qs(parts.query))
             except BrokenPipeError:
                 # The browser closed the connection mid-response (e.g. it
                 # navigated away between polls). Not an error.
@@ -195,20 +208,16 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             # only the whitelisted event names and their known props are passed.
             event = body.get("event")
             if event == "cta_clicked":
-                from strix.telemetry import posthog  # noqa: PLC0415
+                from strix.telemetry import posthog
 
                 cta = str(body.get("cta") or "unknown")
                 surface = body.get("surface")
-                posthog.viewer_cta_clicked(
-                    cta, surface=str(surface) if surface else None
-                )
+                posthog.viewer_cta_clicked(cta, surface=str(surface) if surface else None)
             elif event in self._EMAIL_EVENTS:
-                from strix.telemetry import posthog  # noqa: PLC0415
+                from strix.telemetry import posthog
 
                 purpose = body.get("purpose")
-                posthog.viewer_email_event(
-                    str(event), purpose=str(purpose) if purpose else None
-                )
+                posthog.viewer_email_event(str(event), purpose=str(purpose) if purpose else None)
             self.send_response(HTTPStatus.NO_CONTENT)
             self.end_headers()
 
@@ -222,16 +231,17 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             if path == "/api/capabilities":
                 # Steering is only possible when the viewer shares a live scan's
                 # coordinator + event loop (the TUI launcher wires a handler).
-                self._send_json(
-                    HTTPStatus.OK, {"can_steer": state.steer_handler is not None}
-                )
+                self._send_json(HTTPStatus.OK, {"can_steer": state.steer_handler is not None})
                 return
             if path == "/api/auth/status":
+                # Report verification through is_verified() so an expired record
+                # is advertised as unverified -- otherwise the SPA would suppress
+                # re-verification while history stays locked, stranding the user.
                 record = auth.read_auth()
                 self._send_json(
                     HTTPStatus.OK,
                     {
-                        "verified": record is not None,
+                        "verified": auth.is_verified(),
                         "email": record.get("email") if record else None,
                     },
                 )
@@ -242,6 +252,14 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             run_dir = resolve_run_dir(state.base_dir, run_param, state.run_dir)
             if run_dir is None:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
+                return
+
+            # The launched run is always viewable. Any *other* run's data is part
+            # of the gated history, so it requires the same email verification as
+            # the /api/runs list — otherwise knowing a run name would leak its
+            # metadata, vulnerabilities, report, and transcript.
+            if run_dir.resolve() != state.run_dir.resolve() and not auth.is_verified():
+                self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
                 return
 
             if path == "/api/run":
@@ -292,6 +310,9 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self._send_json(HTTPStatus.OK, {"ok": True})
 
         def _handle_report_send(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
             record = auth.read_auth()
             if record is None:
                 self._send_json(HTTPStatus.UNAUTHORIZED, {"error": "unverified"})
@@ -302,7 +323,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "unknown run"})
                 return
 
-            from strix.viewer.report_pdf import build_encrypted_report  # noqa: PLC0415
+            from strix.viewer.report_pdf import build_encrypted_report
 
             pdf_bytes, password, filename = build_encrypted_report(run_dir)
             summary = read_run_summary(run_dir)
@@ -325,6 +346,9 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
         _STEER_MESSAGE_MAX = 4000
 
         def _handle_steer(self) -> None:
+            if not self._has_session():
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "forbidden"})
+                return
             body = self._read_body()
             agent_id = body.get("agent_id")
             message = body.get("message")
@@ -340,9 +364,7 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
                 return
             if state.steer_handler is None:
                 # Standalone / finished-run viewing has no live scan to steer.
-                self._send_json(
-                    HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"}
-                )
+                self._send_json(HTTPStatus.FORBIDDEN, {"error": "steering_unavailable"})
                 return
             delivered = state.steer_handler(agent_id, message)
             if delivered:
@@ -364,12 +386,41 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             status = status_by_code.get(exc.code, HTTPStatus.BAD_GATEWAY)
             self._send_json(status, {"error": exc.code})
 
-        def _handle_static(self, path: str) -> None:
+        def _cookies(self) -> dict[str, str]:
+            jar: dict[str, str] = {}
+            for chunk in (self.headers.get("Cookie") or "").split(";"):
+                name, sep, value = chunk.strip().partition("=")
+                if sep:
+                    jar[name] = value
+            return jar
+
+        def _has_session(self) -> bool:
+            """True when the request carries this process's session capability.
+
+            The cookie is set only when the SPA is served (index.html), so only
+            the browser this process handed the page to can pass. A direct
+            caller on an exposed port has no cookie and is rejected.
+            """
+            supplied = self._cookies().get(SESSION_COOKIE, "")
+            return bool(supplied) and secrets.compare_digest(supplied, state.session_token)
+
+        def _token_presented(self, query: dict[str, list[str]]) -> bool:
+            """True when the request carries the correct bootstrap token.
+
+            The token reaches the operator's browser through the URL printed /
+            opened by the process that started the server, a channel an
+            arbitrary network caller on an exposed port cannot observe.
+            """
+            supplied = (query.get("token") or [""])[0]
+            return bool(supplied) and secrets.compare_digest(supplied, state.session_token)
+
+        def _handle_static(self, path: str, query: dict[str, list[str]]) -> None:
             target = self._resolve_asset(path)
             if target is None:
                 # SPA fallback: unknown non-asset routes render index.html so
                 # client-side deep links work.
                 target = state.assets_dir / "index.html"
+            is_index = target.name == "index.html"
             if not target.is_file():
                 self._send_json(HTTPStatus.NOT_FOUND, {"error": "not found"})
                 return
@@ -378,6 +429,16 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", content_type or "application/octet-stream")
             self.send_header("Content-Length", str(len(content)))
+            if is_index and self._token_presented(query):
+                # Exchange the bootstrap token for the per-process session
+                # capability. Issued only when the correct token is presented,
+                # so a caller who merely reaches ``/`` never obtains it.
+                # HttpOnly (JS never needs it; fetch sends it automatically) and
+                # SameSite=Strict (never sent from a cross-site context).
+                self.send_header(
+                    "Set-Cookie",
+                    f"{SESSION_COOKIE}={state.session_token}; Path=/; HttpOnly; SameSite=Strict",
+                )
             self.end_headers()
             self.wfile.write(content)
 
@@ -404,6 +465,17 @@ def _make_handler(state: _ViewerState) -> type[BaseHTTPRequestHandler]:
     return ViewerHandler
 
 
+def authorized_url(base_url: str, token: str) -> str:
+    """URL that bootstraps the viewer session for the operator.
+
+    Presenting ``token`` on the initial page load is what mints the session
+    cookie, so this URL is printed / opened only for the operator who started
+    the server. Sharing it (rather than the bare ``base_url``) is what lets a
+    trusted remote user authorize when the viewer is exposed with ``--host``.
+    """
+    return f"{base_url}/?{urlencode({'token': token})}"
+
+
 def serve(
     run_dir: Path,
     *,
@@ -411,8 +483,11 @@ def serve(
     port: int = 0,
     open_browser: bool = True,
     steer_handler: Callable[[str, str], bool] | None = None,
-) -> tuple[ThreadingHTTPServer, str]:
-    """Start the viewer server on a background thread and return (server, url).
+) -> tuple[ThreadingHTTPServer, str, str]:
+    """Start the viewer server on a background thread; return (server, url, token).
+
+    ``url`` is the bare base; pass it through ``authorized_url(url, token)`` to
+    build the operator link that authorizes the browser.
 
     Binds an ephemeral port by default. If a fixed ``port`` is requested but in
     use, falls back to an ephemeral port. Reused by both the ``strix view``
@@ -442,9 +517,9 @@ def serve(
     thread.start()
 
     if open_browser:
-        _open_browser(url)
+        _open_browser(authorized_url(url, state.session_token))
 
-    return httpd, url
+    return httpd, url, state.session_token
 
 
 def _open_browser(url: str) -> None:
@@ -454,4 +529,4 @@ def _open_browser(url: str) -> None:
         logger.debug("could not open browser for %s", url, exc_info=True)
 
 
-__all__ = ["bundle_dir", "bundle_is_built", "serve"]
+__all__ = ["authorized_url", "bundle_dir", "bundle_is_built", "serve"]

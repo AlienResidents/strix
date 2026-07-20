@@ -214,6 +214,11 @@ ignore = [
 # args they intentionally ignore.
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]
 "tests/test_report_pdf.py" = ["S105", "S106"]
+# Stdlib HTTP handler overrides (do_GET/do_POST) and lazy imports that avoid a
+# circular dependency with strix.telemetry / strix.viewer.report_pdf.
+"strix/viewer/server.py" = ["N802", "PLC0415"]
+# Lazy telemetry import to avoid importing PostHog before the viewer starts.
+"strix/viewer/cli.py" = ["PLC0415"]
 # Lazy imports inside functions to avoid circular dependency with
 # strix.telemetry / strix.report.dedupe / cvss.
 "strix/tools/notes/tools.py" = ["PLC0415", "TC002"]
