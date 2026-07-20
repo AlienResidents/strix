@@ -41,12 +41,12 @@ import {
 import { SIGNUP_URL, trackCta } from "@/lib/cta";
 import Sidebar from "@/components/Sidebar";
 import PastRunsView from "@/components/PastRunsView";
-import EmailReportDialog from "@/components/EmailReportDialog";
+import EmailReportView from "@/components/EmailReportView";
 import FeatureDetail from "@/components/FeatureDetail";
 import { ProTile, ProInlineCta, type ProItem } from "@/components/ProCta";
 import { FEATURES } from "@/lib/pro-features";
 
-export type View = "overview" | "issues" | "agents" | "history" | "feature";
+export type View = "overview" | "issues" | "agents" | "history" | "feature" | "email";
 
 const TRUST_BANNER =
   "Your findings stay on your machine. They're rendered here locally in your browser and never uploaded or stored by Strix. Emailing a report is an explicit opt-in that sends an encrypted copy only you can open.";
@@ -75,7 +75,6 @@ export default function App() {
   const [activeFeature, setActiveFeature] = useState<string | null>(null);
   const [auth, setAuth] = useState<AuthStatus | null>(null);
   const [runs, setRuns] = useState<RunsPayload | null>(null);
-  const [emailOpen, setEmailOpen] = useState(false);
   const [emailPurpose, setEmailPurpose] = useState<"report" | "verify">("report");
 
   const refreshAuth = useCallback(async () => {
@@ -186,13 +185,13 @@ export default function App() {
   const openEmail = useCallback(() => {
     trackCta("email_report");
     setEmailPurpose("report");
-    setEmailOpen(true);
+    setView("email");
   }, []);
 
   const openVerify = useCallback(() => {
     trackCta("history_unlock");
     setEmailPurpose("verify");
-    setEmailOpen(true);
+    setView("email");
   }, []);
 
   const openHistory = useCallback(() => {
@@ -273,22 +272,33 @@ export default function App() {
         </div>
 
         <div className="max-w-[72rem] mx-auto px-6 py-8 space-y-6">
-          {/* Trust banner (not on the Pro feature upsell pages) */}
-          {view !== "feature" && (
+          {/* Trust banner (not on the Pro feature or email pages) */}
+          {view !== "feature" && view !== "email" && (
             <div className="rounded-lg px-4 py-3 flex gap-3 items-start" style={{ border: "1px solid rgba(255,255,255,0.08)" }}>
               <ShieldCheck className="w-5 h-5 flex-shrink-0 mt-0.5 text-emerald-400" aria-hidden="true" />
               <p className="text-sm text-[#aaa] leading-relaxed">{TRUST_BANNER}</p>
             </div>
           )}
 
-          {error && !run && view !== "history" && (
+          {error && !run && view !== "history" && view !== "email" && view !== "feature" && (
             <div className="rounded-lg px-4 py-3 flex gap-3 items-start border border-red-500/30 bg-red-500/5">
               <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5 text-red-400" aria-hidden="true" />
               <p className="text-sm text-red-300">{error}</p>
             </div>
           )}
 
-          {view === "feature" && activeFeature && FEATURES[activeFeature] ? (
+          {view === "email" ? (
+            <EmailReportView
+              activeRun={activeRun}
+              auth={auth}
+              purpose={emailPurpose}
+              onAuthChanged={() => {
+                void refreshAuth();
+                void refreshRuns();
+              }}
+              onExit={(dest) => setView(dest === "history" ? "history" : "overview")}
+            />
+          ) : view === "feature" && activeFeature && FEATURES[activeFeature] ? (
             <FeatureDetail feature={FEATURES[activeFeature]} />
           ) : view === "history" ? (
             <div className="space-y-4">
@@ -358,18 +368,6 @@ export default function App() {
           ) : null}
         </div>
       </div>
-
-      <EmailReportDialog
-        open={emailOpen}
-        onClose={() => setEmailOpen(false)}
-        activeRun={activeRun}
-        auth={auth}
-        purpose={emailPurpose}
-        onVerified={() => {
-          void refreshAuth();
-          void refreshRuns();
-        }}
-      />
     </div>
   );
 }

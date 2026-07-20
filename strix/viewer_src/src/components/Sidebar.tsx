@@ -138,6 +138,7 @@ export default function Sidebar({
             icon={Mail}
             label="Email report"
             desc="Get an encrypted PDF by email"
+            active={view === "email"}
             onClick={onOpenEmail}
           />
 

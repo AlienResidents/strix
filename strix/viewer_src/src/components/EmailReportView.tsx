@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { X, Mail, ShieldCheck, Lock, Copy, Check, Loader2, AlertCircle } from "lucide-react";
+import { useState } from "react";
+import { Mail, ShieldCheck, Lock, Copy, Check, Loader2, AlertCircle, ArrowLeft } from "lucide-react";
 import {
   otpStart,
   otpVerify,
@@ -7,55 +7,32 @@ import {
   type AuthStatus,
 } from "@/data/serverSource";
 
+/**
+ * The email-report / email-verification flow rendered as its own page (not a
+ * modal, so it never floats over another surface). Report mode ends in the
+ * one-time password panel; verify mode just confirms the email and returns to
+ * the caller. The page unmounts when you navigate away, so state resets each
+ * time it is opened.
+ */
+
 type Step = "disclosure" | "email" | "code" | "sending" | "password";
 
-/**
- * "report" runs the full disclosure -> verify -> encrypted send flow.
- * "verify" is a verify-only flow (view past runs): it starts at the email step
- * and finishes as soon as the code is confirmed, without sending a report.
- */
-type Purpose = "report" | "verify";
-
-interface EmailReportDialogProps {
-  open: boolean;
-  onClose: () => void;
+interface EmailReportViewProps {
   activeRun: string | null;
   auth: AuthStatus | null;
-  purpose: Purpose;
-  /** Re-fetch auth status after a successful verify (lifts state to App). */
-  onVerified: () => void;
+  purpose: "report" | "verify";
+  /** Refresh auth + runs after a successful verify (lifts state to App). */
+  onAuthChanged: () => void;
+  /** Leave this page (report "Done" -> overview; verify success -> history). */
+  onExit: (dest: "overview" | "history") => void;
 }
 
 const OTP_START_ERRORS: Record<string, string> = {
+  work_email_required: "Please use your work email, not a personal one.",
   rate_limited: "Too many requests. Wait a minute and try again.",
   invalid_email: "That email does not look right. Check it and try again.",
-  work_email_required: "Please use your work email, not a personal one.",
   unavailable: "The email service is unavailable right now. Try again shortly.",
 };
-
-// Small common set for instant UX only; the relay is authoritative on the full
-// free/personal domain list.
-const COMMON_FREE_DOMAINS = new Set([
-  "gmail.com",
-  "googlemail.com",
-  "yahoo.com",
-  "ymail.com",
-  "outlook.com",
-  "hotmail.com",
-  "live.com",
-  "icloud.com",
-  "me.com",
-  "aol.com",
-  "proton.me",
-  "protonmail.com",
-  "gmx.com",
-  "mail.com",
-]);
-
-function isCommonFreeEmail(email: string): boolean {
-  const domain = email.split("@")[1]?.trim().toLowerCase();
-  return domain != null && COMMON_FREE_DOMAINS.has(domain);
-}
 
 const SEND_ERRORS: Record<string, string> = {
   forbidden: "This email was unsubscribed from Strix, so we cannot send to it.",
@@ -63,17 +40,26 @@ const SEND_ERRORS: Record<string, string> = {
   unavailable: "The email service is unavailable right now. Try again shortly.",
 };
 
-export default function EmailReportDialog({
-  open,
-  onClose,
+// A small set of common personal providers for instant client-side feedback.
+// The relay is authoritative (it checks the full free-email-domains list).
+const COMMON_FREE_DOMAINS = new Set([
+  "gmail.com", "googlemail.com", "yahoo.com", "ymail.com", "outlook.com",
+  "hotmail.com", "live.com", "icloud.com", "me.com", "aol.com", "proton.me",
+  "protonmail.com", "gmx.com", "mail.com",
+]);
+
+export default function EmailReportView({
   activeRun,
   auth,
   purpose,
-  onVerified,
-}: EmailReportDialogProps) {
+  onAuthChanged,
+  onExit,
+}: EmailReportViewProps) {
   const verified = auth?.verified === true;
-  const [step, setStep] = useState<Step>("disclosure");
-  const [email, setEmail] = useState("");
+  const verifyOnly = purpose === "verify";
+  // Verify mode skips the report disclosure and goes straight to the email step.
+  const [step, setStep] = useState<Step>(verifyOnly ? "email" : "disclosure");
+  const [email, setEmail] = useState(auth?.email ?? "");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,36 +67,7 @@ export default function EmailReportDialog({
   const [password, setPassword] = useState("");
   const [filename, setFilename] = useState("");
   const [copied, setCopied] = useState(false);
-  const sentTo = useRef<string>("");
-
-  // Reset each time the dialog opens. The report flow opens on the disclosure
-  // step; the verify-only flow skips it and starts straight at the email step.
-  // Prefill the email when already verified so the flow can skip ahead.
-  useEffect(() => {
-    if (!open) return;
-    setStep(purpose === "verify" ? "email" : "disclosure");
-    setCode("");
-    setBusy(false);
-    setError(null);
-    setNotice(null);
-    setPassword("");
-    setFilename("");
-    setCopied(false);
-    setEmail(auth?.email ?? "");
-  }, [open, auth?.email, purpose]);
-
-  // Close on Escape (but never while a password is on screen: it must not be
-  // dismissed by accident).
-  useEffect(() => {
-    if (!open) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && step !== "password") onClose();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open, step, onClose]);
-
-  if (!open) return null;
+  const [sentTo, setSentTo] = useState("");
 
   const doSend = async () => {
     setStep("sending");
@@ -122,7 +79,6 @@ export default function EmailReportDialog({
       setStep("password");
       return;
     }
-    // A stale session needs a fresh OTP; unverified means we never had one.
     if (result.error === "reverify" || result.error === "unverified") {
       setNotice("Your verification expired. Enter your email to verify again.");
       setStep("email");
@@ -135,11 +91,8 @@ export default function EmailReportDialog({
   const startFlow = () => {
     setError(null);
     setNotice(null);
-    if (verified) {
-      void doSend();
-    } else {
-      setStep("email");
-    }
+    if (verified) void doSend();
+    else setStep("email");
   };
 
   const submitEmail = async () => {
@@ -148,9 +101,8 @@ export default function EmailReportDialog({
       setError("Enter your email to continue.");
       return;
     }
-    // Snappy client-side guard for the obvious personal domains; the relay is
-    // still authoritative on the full list.
-    if (isCommonFreeEmail(value)) {
+    const domain = value.slice(value.lastIndexOf("@") + 1).toLowerCase();
+    if (COMMON_FREE_DOMAINS.has(domain)) {
       setError(OTP_START_ERRORS.work_email_required);
       return;
     }
@@ -176,18 +128,14 @@ export default function EmailReportDialog({
     setError(null);
     const result = await otpVerify(email.trim(), value);
     setBusy(false);
-    if (result.verified) {
-      sentTo.current = result.email;
-      onVerified();
-      // Verify-only flow (viewing past runs) stops here; no report is sent.
-      if (purpose === "verify") {
-        onClose();
-        return;
-      }
-      void doSend();
-    } else {
+    if (!result.verified) {
       setError("That code did not match. Check it and try again.");
+      return;
     }
+    setSentTo(result.email);
+    onAuthChanged();
+    if (verifyOnly) onExit("history");
+    else void doSend();
   };
 
   const copyPassword = async () => {
@@ -200,51 +148,34 @@ export default function EmailReportDialog({
     }
   };
 
-  const confirmationEmail = sentTo.current || auth?.email || email.trim();
+  const confirmationEmail = sentTo || auth?.email || email.trim();
 
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-label="Email an encrypted report"
-    >
+    <div className="space-y-4">
+      <button
+        onClick={() => onExit(verifyOnly ? "history" : "overview")}
+        className="cursor-pointer inline-flex items-center gap-1.5 text-sm text-[#888] transition-colors hover:text-white"
+      >
+        <ArrowLeft className="h-4 w-4" />
+        {verifyOnly ? "Back to past runs" : "Back to results"}
+      </button>
+
+      <div className="flex items-center gap-2">
+        <Mail className="h-5 w-5 text-[#888]" aria-hidden="true" />
+        <h1 className="text-2xl font-semibold text-white">
+          {verifyOnly ? "Verify your email" : "Email report"}
+        </h1>
+      </div>
+
       <div
-        className="absolute inset-0 bg-black/70"
-        onClick={() => step !== "password" && onClose()}
-      />
-      <div
-        className="relative z-10 w-full max-w-md rounded-2xl bg-[#0a0a0a] p-6 shadow-2xl"
+        className="max-w-md rounded-2xl bg-[rgba(255,255,255,0.02)] p-6"
         style={{ border: "1px solid #2a2a2a" }}
       >
-        <button
-          onClick={onClose}
-          className="absolute right-4 top-4 cursor-pointer text-[#666] transition-colors hover:text-white"
-          aria-label="Close"
-        >
-          <X className="h-5 w-5" />
-        </button>
-
-        <div className="mb-4 flex items-center gap-2.5">
-          <div
-            className="flex h-9 w-9 items-center justify-center rounded-lg"
-            style={{ border: "1px solid #2a2a2a", background: "rgba(255,255,255,0.04)" }}
-          >
-            <Mail className="h-4 w-4 text-emerald-400" aria-hidden="true" />
-          </div>
-          <div>
-            <h2 className="text-base font-semibold text-white">
-              {purpose === "verify"
-                ? "Verify your email to view your runs"
-                : "Email an encrypted PDF report of this run"}
-            </h2>
-            <p className="text-xs text-[#666]">
-              {purpose === "verify"
-                ? "We send a one-time code to confirm it is you."
-                : "Verified by a one-time code sent to your email"}
-            </p>
-          </div>
-        </div>
+        <p className="mb-4 text-xs text-[#666]">
+          {verifyOnly
+            ? "We send a one-time code to confirm it is you."
+            : "Verified by a one-time code sent to your email"}
+        </p>
 
         {error && (
           <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-500/30 bg-red-500/5 px-3 py-2">
@@ -299,7 +230,7 @@ export default function EmailReportDialog({
             }}
           >
             <label className="block">
-              <span className="mb-1.5 block text-xs text-[#888]">Your email</span>
+              <span className="mb-1.5 block text-xs text-[#888]">Your work email</span>
               <input
                 type="email"
                 autoFocus
@@ -309,7 +240,7 @@ export default function EmailReportDialog({
                 className="w-full rounded-lg bg-black px-3 py-2.5 text-sm text-white outline-none transition-colors focus:border-[#444]"
                 style={{ border: "1px solid #2a2a2a" }}
               />
-              <span className="mt-1.5 block text-xs text-[#666]">Use your work email.</span>
+              <span className="mt-1.5 block text-[11px] text-[#666]">Use your work email.</span>
             </label>
             <button
               type="submit"
@@ -348,7 +279,7 @@ export default function EmailReportDialog({
               className="flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-black transition-opacity hover:opacity-90 disabled:opacity-60"
             >
               {busy && <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />}
-              {purpose === "verify" ? "Verify" : "Verify and send"}
+              {verifyOnly ? "Verify" : "Verify and send"}
             </button>
             <button
               type="button"
@@ -401,7 +332,7 @@ export default function EmailReportDialog({
               </p>
             </div>
             <button
-              onClick={onClose}
+              onClick={() => onExit("overview")}
               className="w-full cursor-pointer rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-[rgba(255,255,255,0.06)]"
               style={{ border: "1px solid #2a2a2a" }}
             >
