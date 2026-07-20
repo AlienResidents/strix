@@ -74,7 +74,7 @@ export default function Sidebar({
             onClick={() => trackCta("sidebar_start_free")}
             className="mt-3 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-lg bg-white px-3 py-2 text-sm font-semibold text-black transition-opacity hover:opacity-90"
           >
-            Start free
+            Explore full platform
             <ArrowUpRight className="h-3.5 w-3.5" aria-hidden="true" />
           </a>
           {verified && email && (
@@ -84,7 +84,7 @@ export default function Sidebar({
             >
               <ShieldCheck className="h-3.5 w-3.5 flex-shrink-0 text-emerald-400" aria-hidden="true" />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] text-[#666]">Signed in as</p>
+                <p className="truncate text-[11px] text-[#666]">Linked email</p>
                 <p className="truncate text-xs text-[#aaa]" title={email}>{email}</p>
               </div>
               <button
