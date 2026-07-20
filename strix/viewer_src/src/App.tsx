@@ -113,8 +113,17 @@ export default function App() {
       {/* Top bar */}
       <div className="border-b border-[#222]">
         <div className="max-w-[88rem] mx-auto px-6 py-4 flex items-center gap-1.5">
-          <img src="./logo.png" alt="Strix Logo" className="w-10 h-8 object-cover opacity-90" />
-          <div className="text-base text-white font-medium tracking-tight">Strix</div>
+          <a
+            href="https://app.strix.ai"
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={() => trackCta("logo")}
+            className="flex items-center gap-1.5 opacity-90 transition-opacity hover:opacity-100"
+            title="Open Strix Cloud"
+          >
+            <img src="./logo.png" alt="Strix" className="w-10 h-8 object-cover" />
+            <div className="text-base text-white font-medium tracking-tight">Strix</div>
+          </a>
           <span className="ml-3 text-xs text-[#666]">Local results</span>
           {run && <LiveIndicator finished={run.finished} />}
         </div>
