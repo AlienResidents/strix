@@ -132,18 +132,58 @@ def test_server_event_endpoint_forwards_cta(
     (assets / "index.html").write_text("x", encoding="utf-8")
     monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
 
-    seen: list[str] = []
-    monkeypatch.setattr("strix.telemetry.posthog.viewer_cta_clicked", seen.append)
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "strix.telemetry.posthog.viewer_cta_clicked",
+        lambda cta, surface=None: seen.append((cta, surface)),
+    )
 
     httpd, url = serve(run_dir, open_browser=False)
     try:
-        body = json.dumps({"event": "cta_clicked", "cta": "PR reviews"}).encode()
+        body = json.dumps(
+            {"event": "cta_clicked", "cta": "PR reviews", "surface": "sidebar_nav"}
+        ).encode()
         req = urllib.request.Request(  # noqa: S310 - localhost test server
             f"{url}/api/event", data=body, headers={"Content-Type": "application/json"}
         )
         with urllib.request.urlopen(req) as resp:  # noqa: S310
             assert resp.status == 204
-        assert seen == ["PR reviews"]
+        assert seen == [("PR reviews", "sidebar_nav")]
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def test_server_event_endpoint_forwards_email_funnel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run_dir = _make_run(tmp_path, "evt2", status="running", end_time=None)
+    assets = tmp_path / "bundle"
+    assets.mkdir()
+    (assets / "index.html").write_text("x", encoding="utf-8")
+    monkeypatch.setattr("strix.viewer.server.bundle_dir", lambda: assets)
+
+    seen: list[tuple[str, str | None]] = []
+    monkeypatch.setattr(
+        "strix.telemetry.posthog.viewer_email_event",
+        lambda step, purpose=None: seen.append((step, purpose)),
+    )
+
+    httpd, url = serve(run_dir, open_browser=False)
+    try:
+        # A whitelisted funnel event is forwarded; an unknown event is ignored.
+        for payload, expected in (
+            ({"event": "email_verified", "purpose": "report"}, [("email_verified", "report")]),
+            ({"event": "not_a_real_event"}, [("email_verified", "report")]),
+        ):
+            req = urllib.request.Request(  # noqa: S310 - localhost test server
+                f"{url}/api/event",
+                data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json"},
+            )
+            with urllib.request.urlopen(req) as resp:  # noqa: S310
+                assert resp.status == 204
+            assert seen == expected
     finally:
         httpd.shutdown()
         httpd.server_close()
