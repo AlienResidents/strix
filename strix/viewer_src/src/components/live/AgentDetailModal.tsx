@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
-import { X } from "lucide-react";
+import { Radio, X } from "lucide-react";
 import { AgentTranscript } from "./AgentTranscript";
-import { SIGNUP_URL, ctaUrl, trackCta } from "@/lib/cta";
+import { AgentSteerInput } from "./AgentSteerInput";
 import type { TranscriptAgent, TranscriptEvent } from "@/data/serverSource";
 
 /** Status -> the small leading dot color, matching the graph node styling. */
@@ -27,10 +27,12 @@ const NEAR_BOTTOM_PX = 80;
 export function AgentDetailModal({
   agent,
   events,
+  steerable,
   onClose,
 }: {
   agent: TranscriptAgent;
   events: TranscriptEvent[];
+  steerable: boolean;
   onClose: () => void;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -98,18 +100,15 @@ export function AgentDetailModal({
           <AgentTranscript agent={agent} events={events} showHeader={false} />
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#222] px-5 py-3">
-          <span className="text-xs text-[#888]">Steer agents live from your terminal.</span>
-          <a
-            href={ctaUrl(SIGNUP_URL, "steer_agent")}
-            target="_blank"
-            rel="noopener noreferrer"
-            onClick={() => trackCta("steer_agent", "agents")}
-            className="text-xs font-medium text-[#60a5fa] hover:underline"
-          >
-            Upgrade to Pro to steer agents from the web &rarr;
-          </a>
-        </div>
+        {steerable && (
+          <div className="border-t border-[#222] px-5 py-3">
+            <div className="mb-2 flex items-center gap-1.5">
+              <Radio className="h-3.5 w-3.5 text-[#888]" aria-hidden="true" />
+              <span className="text-xs font-medium text-[#aaa]">Steer this agent</span>
+            </div>
+            <AgentSteerInput agentId={agent.id} agentName={agent.name} />
+          </div>
+        )}
       </div>
     </div>
   );
