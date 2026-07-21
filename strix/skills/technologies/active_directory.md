@@ -48,7 +48,7 @@ ldapdomaindump ldap://<DC> -u '<DOMAIN>\<USER>' -p <PASS>
 
 **BloodHound graph (the single most valuable step)**
 ```
-bloodhound-python -d <DOMAIN> -u <USER> -p <PASS> -c All -ns <DC_IP> --zip
+bloodhound-ce-python -d <DOMAIN> -u <USER> -p <PASS> -c All -ns <DC_IP> --zip
 # or, remote SharpHound-equivalent collector:
 nxc ldap <DC> -u <USER> -p <PASS> --bloodhound --collection-method All --dns-server <DC_IP>
 ```
@@ -209,10 +209,11 @@ Confirm with a version/patch check before firing — these are destructive.
 pipx install impacket
 pipx install netexec            # nxc — CME successor: ldap/smb/winrm enum, roasting, bloodhound, ntds
 pipx install certipy-ad         # AD CS enum + ESC1-ESC17 abuse, shadow credentials
-pipx install bloodhound-ce      # bloodhound-python collector (BloodHound CE ingestor)
+pipx install bloodhound-ce      # bloodhound-ce-python collector (BloodHound CE ingestor)
 pipx install coercer            # multi-protocol coercion (MS-EFSR/RPRN/DFSNM/FSRVP)
 pipx install bloodyAD           # DACL / LDAP object edits over LDAP
-pipx install ldapdomaindump kerbrute-pw 2>/dev/null || true
+pipx install ldapdomaindump     # LDAP dumper (bloodhound.py author)
+go install github.com/ropnop/kerbrute@latest   # kerbrute (Go) — user enum / pre-auth brute
 
 # Kali apt packages
 sudo apt-get install -y smbclient ldap-utils krb5-user enum4linux-ng responder hashcat john
@@ -225,7 +226,7 @@ sudo apt-get install -y smbclient ldap-utils krb5-user enum4linux-ng responder h
 - **Responder / ntlmrelayx / Coercer / PetitPotam** — the poisoning→coercion→relay chain (needs L2 access or a coercible target).
 - **hashcat / john** — offline cracking of roasted `$krb5tgs$`/`$krb5asrep$` blobs (modes `13100` / `18200`).
 
-Humans often use GUI BloodHound and Windows-side C# tooling (SharpHound, Rubeus, Certify, PowerView); in-sandbox prefer the Python/Linux equivalents above (`bloodhound-python`, impacket, Certipy, `nxc`).
+Humans often use GUI BloodHound and Windows-side C# tooling (SharpHound, Rubeus, Certify, PowerView); in-sandbox prefer the Python/Linux equivalents above (`bloodhound-ce-python`, impacket, Certipy, `nxc`).
 
 ## Summary
 
