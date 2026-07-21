@@ -58,16 +58,15 @@ def read_auth() -> dict[str, Any] | None:
     return data
 
 
-def _expiry(record: dict[str, Any]) -> datetime | None:
-    """Parse ``verified_at`` (the relay's ``expires_at``) into an aware UTC datetime.
+def parse_expiry(raw: object) -> datetime | None:
+    """Parse a relay ``expires_at`` value into an aware UTC datetime.
 
     Accepts both ISO 8601 strings and epoch seconds (as a number or numeric
     string) so a valid relay expiry is not misread as missing. Returns None only
-    when it is genuinely absent or unparseable; the local gate then fails closed
-    (see ``is_verified``), matching the relay, which rejects a token with no valid
-    expiry on report send.
+    when it is genuinely absent or unparseable; both the local gate (see
+    ``is_verified``) and OTP verification (see ``otp_verify``) fail closed on such
+    values, matching the relay, which rejects a token with no valid expiry.
     """
-    raw = record.get("verified_at")
     if isinstance(raw, bool):
         return None
     if isinstance(raw, int | float):
@@ -83,6 +82,11 @@ def _expiry(record: dict[str, Any]) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _expiry(record: dict[str, Any]) -> datetime | None:
+    """The stored ``verified_at`` parsed to a datetime, or None if unusable."""
+    return parse_expiry(record.get("verified_at"))
 
 
 def _from_epoch(seconds: float) -> datetime | None:
@@ -192,6 +196,11 @@ def otp_verify(email: str, code: str) -> dict[str, Any]:
         timeout=_OTP_TIMEOUT,
     )
     if status == 200 and isinstance(data.get("token"), str):
+        # A token with no usable expiry cannot unlock history locally (the gate
+        # fails closed), so treat such a response as a failed verification rather
+        # than reporting success and then leaving the user stuck unverified.
+        if parse_expiry(data.get("expires_at")) is None:
+            raise RelayError("unavailable")
         return data
     if status == 403:
         raise RelayError("invalid_code")

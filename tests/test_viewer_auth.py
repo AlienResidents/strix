@@ -122,7 +122,8 @@ def test_otp_start_maps_errors(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_otp_verify_success_and_invalid(monkeypatch: pytest.MonkeyPatch) -> None:
-    _stub_post(monkeypatch, 200, {"token": "t", "email": "a@b.com", "expires_at": "later"})
+    expires = _iso(timedelta(hours=1))
+    _stub_post(monkeypatch, 200, {"token": "t", "email": "a@b.com", "expires_at": expires})
     result = auth.otp_verify("a@b.com", "123456")
     assert result["token"] == "t"
 
@@ -130,6 +131,16 @@ def test_otp_verify_success_and_invalid(monkeypatch: pytest.MonkeyPatch) -> None
     with pytest.raises(auth.RelayError) as exc:
         auth.otp_verify("a@b.com", "000000")
     assert exc.value.code == "invalid_code"
+
+
+def test_otp_verify_rejects_token_without_usable_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
+    # A 200 with a token but no valid expiry must not be reported as success,
+    # otherwise the caller would store a record that immediately reads unverified.
+    for expires in (None, "", "later"):
+        _stub_post(monkeypatch, 200, {"token": "t", "email": "a@b.com", "expires_at": expires})
+        with pytest.raises(auth.RelayError) as exc:
+            auth.otp_verify("a@b.com", "123456")
+        assert exc.value.code == "unavailable"
 
 
 def test_report_send_never_includes_password(monkeypatch: pytest.MonkeyPatch) -> None:
