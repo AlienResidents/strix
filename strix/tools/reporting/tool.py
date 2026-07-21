@@ -440,9 +440,6 @@ async def create_vulnerability_report(
       user's data, a read-only information leak, or merely confirming
       that an account / domain / software version *exists* (enumeration)
       is ``C:L`` (often ``I:N``) — not ``C:H``.
-    - **Score one weakness per report.** If the alarming impact depends
-      on chaining a second issue, report and score them separately rather
-      than folding the chained worst case into one inflated vector.
     - **Model required position and interaction honestly.** An
       adversary-in-the-middle prerequisite (e.g. cleartext transmission)
       or a required victim action is not guaranteed — reflect it in
