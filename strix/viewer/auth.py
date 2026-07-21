@@ -61,18 +61,36 @@ def read_auth() -> dict[str, Any] | None:
 def _expiry(record: dict[str, Any]) -> datetime | None:
     """Parse ``verified_at`` (the relay's ``expires_at``) into an aware UTC datetime.
 
-    Returns None when it is absent or unparseable. The local gate fails closed on
-    such records (see ``is_verified``), matching the relay, which rejects a token
-    with no valid expiry on report send.
+    Accepts both ISO 8601 strings and epoch seconds (as a number or numeric
+    string) so a valid relay expiry is not misread as missing. Returns None only
+    when it is genuinely absent or unparseable; the local gate then fails closed
+    (see ``is_verified``), matching the relay, which rejects a token with no valid
+    expiry on report send.
     """
     raw = record.get("verified_at")
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int | float):
+        return _from_epoch(raw)
     if not isinstance(raw, str) or not raw:
         return None
+    try:
+        return _from_epoch(float(raw))
+    except ValueError:
+        pass
     try:
         parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _from_epoch(seconds: float) -> datetime | None:
+    """Epoch seconds → aware UTC datetime, or None if out of range."""
+    try:
+        return datetime.fromtimestamp(seconds, tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def is_verified() -> bool:
