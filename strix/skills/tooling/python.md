@@ -98,12 +98,11 @@ The sandbox's Python lives in `/app/.venv`, and it is the active virtualenv
 `requests`, `httpx`, `beautifulsoup4` (`bs4`), `lxml`, `pyjwt` (`jwt`),
 `cryptography`.
 
-To add a one-off dependency for an exploit script, use `uv` (already in the
-image and much faster than pip):
+To add a one-off dependency for an exploit script, install it into the active
+venv with `pip`:
 
 ```bash
-uv pip install --python /app/.venv/bin/python <package>
+pip install <package>
 ```
 
-Plain `pip install <package>` also works because the venv is active. Install
-before you import, so scripts don't fail with `ModuleNotFoundError`.
+Install before you import, so scripts don't fail with `ModuleNotFoundError`.
