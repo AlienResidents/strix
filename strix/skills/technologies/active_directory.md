@@ -213,7 +213,7 @@ pipx install bloodhound-ce      # bloodhound-ce-python collector (BloodHound CE 
 pipx install coercer            # multi-protocol coercion (MS-EFSR/RPRN/DFSNM/FSRVP)
 pipx install bloodyAD           # DACL / LDAP object edits over LDAP
 pipx install ldapdomaindump     # LDAP dumper (bloodhound.py author)
-go install github.com/ropnop/kerbrute@latest   # kerbrute (Go) — user enum / pre-auth brute
+# kerbrute (Go, user enum / pre-auth brute) is prebuilt and already on PATH
 
 # Kali apt packages
 sudo apt-get install -y smbclient ldap-utils krb5-user enum4linux-ng responder hashcat john
