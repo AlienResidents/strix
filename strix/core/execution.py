@@ -13,7 +13,13 @@ from agents import RunConfig, Runner
 from agents.exceptions import AgentsException, MaxTurnsExceeded, UserError
 from agents.sandbox.errors import ExecTransportError
 from docker import errors as docker_errors  # type: ignore[import-untyped, unused-ignore]
-from openai import APIError
+from openai import (
+    APIConnectionError,
+    APIError,
+    APIStatusError,
+    APITimeoutError,
+    RateLimitError,
+)
 
 from strix.core.hooks import BudgetExceededError
 from strix.core.inputs import child_initial_input
@@ -76,6 +82,52 @@ async def _compact_session(
         tools_text=_agent_tools_text(agent),
         force=force,
     )
+
+
+# Retryable HTTP statuses for a model/provider call: request timeout + 5xx server errors.
+# 429 is intentionally excluded here; a persistent rate limit is handled as a graceful,
+# resumable scan stop in ``runner.run_strix_scan``.
+_TRANSIENT_MODEL_STATUS_CODES = frozenset({408, 500, 502, 503, 504})
+_MAX_TRANSIENT_MODEL_RETRIES = 4
+_TRANSIENT_MODEL_RETRY_BASE_DELAY_S = 2.0
+_TRANSIENT_MODEL_RETRY_MAX_DELAY_S = 30.0
+
+
+def _model_error_status_code(exc: BaseException) -> int | None:
+    code = getattr(exc, "status_code", None)
+    return code if isinstance(code, int) else None
+
+
+def _is_transient_model_error(exc: BaseException) -> bool:
+    """Return whether a model/provider error is a transient upstream failure worth replaying.
+
+    Three families are treated as transient:
+
+    * network-level faults reaching the provider (connection reset, read timeout);
+    * retryable HTTP statuses (request timeout + 5xx) surfaced as ``APIStatusError``;
+    * mid-stream provider errors, where the server injects an ``{"error": ...}`` frame into
+      an already-200 SSE stream and the OpenAI SDK raises a bare ``APIError`` with no status
+      code. The agents SDK cannot replay these once tokens have streamed, so an untreated
+      one propagates and crashes the whole scan.
+
+    A persistent rate limit is deliberately excluded (handled as a graceful scan stop at the
+    runner level), as are permanent 4xx client errors (they carry a status code and are
+    surfaced as ``APIStatusError``).
+    """
+    if isinstance(exc, RateLimitError):
+        return False
+    if isinstance(exc, APITimeoutError | APIConnectionError):
+        return True
+    if isinstance(exc, APIStatusError):
+        return exc.status_code in _TRANSIENT_MODEL_STATUS_CODES
+    if isinstance(exc, APIError):
+        return _model_error_status_code(exc) is None
+    return False
+
+
+def _transient_model_retry_delay(attempt: int) -> float:
+    delay = _TRANSIENT_MODEL_RETRY_BASE_DELAY_S * float(2 ** (attempt - 1))
+    return min(delay, _TRANSIENT_MODEL_RETRY_MAX_DELAY_S)
 
 
 async def run_agent_loop(
@@ -387,6 +439,7 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
 ) -> RunResultBase | None:
     image_strips = 0
     compactions = 0
+    model_retries = 0
     while True:
         try:
             await coordinator.mark_running(agent_id)
@@ -488,6 +541,24 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                     )
                     input_data = []
                     continue
+            if model_retries < _MAX_TRANSIENT_MODEL_RETRIES and _is_transient_model_error(exc):
+                model_retries += 1
+                delay = _transient_model_retry_delay(model_retries)
+                logger.warning(
+                    "transient model/provider error for %s; replaying turn "
+                    "(attempt %d/%d, backoff %.1fs): %r",
+                    agent_id,
+                    model_retries,
+                    _MAX_TRANSIENT_MODEL_RETRIES,
+                    delay,
+                    exc,
+                )
+                await asyncio.sleep(delay)
+                # The turn's input was already persisted to the session before the model
+                # call, so replay from session state to avoid duplicating it.
+                if session is not None:
+                    input_data = []
+                continue
             if not interactive:
                 raise
             if isinstance(exc, MaxTurnsExceeded):
