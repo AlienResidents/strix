@@ -1,10 +1,3 @@
-"""Tests for transient model/provider error replay in the agent run cycle.
-
-A transient upstream error (e.g. a mid-stream ``openai.APIError`` injected into an
-already-200 SSE stream) must be retried at the turn level instead of crashing the
-whole scan, while permanent errors and rate limits keep their existing behavior.
-"""
-
 from __future__ import annotations
 
 from typing import Any, cast
@@ -31,7 +24,6 @@ def _request() -> httpx.Request:
 
 
 def _midstream_api_error() -> APIError:
-    """A bare APIError with no status code — the mid-stream generic provider error."""
     return APIError("An error occurred while processing the request.", _request(), body=None)
 
 
@@ -64,7 +56,6 @@ def test_server_errors_are_transient() -> None:
 
 
 def test_rate_limit_is_not_retried_here() -> None:
-    # A persistent rate limit is handled as a graceful scan stop at the runner level.
     rate_limited = RateLimitError(
         "slow down", response=httpx.Response(429, request=_request()), body=None
     )
@@ -81,8 +72,6 @@ def test_client_errors_are_not_transient() -> None:
 
 
 class _FakeStream:
-    """Minimal stand-in for a streamed run result."""
-
     def __init__(self, exc: BaseException | None = None) -> None:
         self._exc = exc
         self._events: list[Any] = []
@@ -137,7 +126,6 @@ async def _run_once(
 async def test_run_cycle_retries_transient_midstream_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A transient mid-stream error is replayed and the turn then succeeds."""
     streams = [_FakeStream(exc=_midstream_api_error()), _FakeStream()]
     result, attempts, _coordinator = await _run_once(monkeypatch, streams)
 
@@ -149,7 +137,6 @@ async def test_run_cycle_retries_transient_midstream_error(
 async def test_run_cycle_gives_up_after_max_retries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Persistent transient errors exhaust the bound, then propagate (non-interactive)."""
     streams = [
         _FakeStream(exc=_midstream_api_error())
         for _ in range(execution._MAX_TRANSIENT_MODEL_RETRIES + 1)
@@ -162,7 +149,6 @@ async def test_run_cycle_gives_up_after_max_retries(
 async def test_run_cycle_does_not_retry_permanent_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A permanent client error is not replayed; it propagates on the first attempt."""
     bad_request = BadRequestError(
         "bad", response=httpx.Response(400, request=_request()), body=None
     )
