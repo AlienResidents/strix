@@ -1,6 +1,8 @@
 import json
 import logging
 import subprocess
+import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -507,6 +509,63 @@ class ReportState:
         self._sync_llm_usage_record()
 
 
+# LiteLLM rebuilds streamed responses from token-only chunks and drops the
+# provider-reported ``usage.cost`` that OpenRouter sends in its final stream
+# chunk (unlike the non-streamed path, which stashes it in hidden params). Since
+# every scan streams, that cost never reaches the callback below. The OpenRouter
+# streaming handler (see strix.config.models) stashes the cost here keyed by the
+# response id so the callback can recover the exact charge for the matching
+# rebuilt response.
+_STREAMED_OPENROUTER_COST_LIMIT = 4096
+_streamed_openrouter_costs: OrderedDict[str, float] = OrderedDict()
+_streamed_openrouter_costs_lock = threading.Lock()
+
+
+def openrouter_stream_cost(usage: Any) -> float | None:
+    """Total OpenRouter-reported cost from a raw stream ``usage`` block, or None.
+
+    Non-BYOK responses bill everything to ``usage.cost``. BYOK responses put the
+    OpenRouter fee in ``usage.cost`` (often 0) and the provider charge in
+    ``usage.cost_details.upstream_inference_cost``, so BYOK totals sum the two.
+    """
+    if not isinstance(usage, dict):
+        return None
+    total = 0.0
+    cost = usage.get("cost")
+    if isinstance(cost, int | float) and cost > 0:
+        total += float(cost)
+    if bool(usage.get("is_byok")):
+        details = usage.get("cost_details")
+        upstream = details.get("upstream_inference_cost") if isinstance(details, dict) else None
+        if isinstance(upstream, int | float) and upstream > 0:
+            total += float(upstream)
+    return total if total > 0 else None
+
+
+def remember_streamed_openrouter_cost(response_id: Any, usage: Any) -> None:
+    """Record an OpenRouter stream's reported cost so the cost callback can read it."""
+    if not isinstance(response_id, str) or not response_id:
+        return
+    cost = openrouter_stream_cost(usage)
+    if cost is None:
+        return
+    with _streamed_openrouter_costs_lock:
+        _streamed_openrouter_costs[response_id] = cost
+        _streamed_openrouter_costs.move_to_end(response_id)
+        while len(_streamed_openrouter_costs) > _STREAMED_OPENROUTER_COST_LIMIT:
+            _streamed_openrouter_costs.popitem(last=False)
+
+
+def _take_streamed_openrouter_cost(completion_response: Any) -> float | None:
+    response_id = getattr(completion_response, "id", None)
+    if response_id is None and isinstance(completion_response, dict):
+        response_id = cast("dict[str, Any]", completion_response).get("id")
+    if not isinstance(response_id, str) or not response_id:
+        return None
+    with _streamed_openrouter_costs_lock:
+        return _streamed_openrouter_costs.pop(response_id, None)
+
+
 def litellm_cost_callback(
     kwargs: Any,
     completion_response: Any,
@@ -540,6 +599,11 @@ def litellm_cost_callback(
 
     if cost is None:
         cost = _usage_reported_cost(completion_response)
+
+    # Recover the exact OpenRouter cost the streaming handler stashed for this
+    # response — LiteLLM drops it from streamed usage, so nothing above sees it.
+    if cost is None:
+        cost = _take_streamed_openrouter_cost(completion_response)
 
     if cost is None:
         cost = _estimate_response_cost(kwargs, completion_response)

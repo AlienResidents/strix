@@ -8,8 +8,21 @@ from unittest.mock import MagicMock, patch
 import litellm
 import pytest
 
-from strix.config.models import _configure_litellm_compatibility
-from strix.report.state import litellm_cost_callback
+import strix.report.state as state_module
+from strix.config.models import (
+    _configure_litellm_compatibility,
+    _install_openrouter_stream_cost_capture,
+)
+from strix.report.state import (
+    litellm_cost_callback,
+    openrouter_stream_cost,
+    remember_streamed_openrouter_cost,
+)
+
+
+@pytest.fixture(autouse=True)
+def _clear_streamed_costs() -> None:
+    state_module._streamed_openrouter_costs.clear()
 
 
 def test_streaming_logging_stays_enabled_for_cost_callback() -> None:
@@ -151,3 +164,83 @@ def test_cost_callback_records_nothing_when_no_cost_available() -> None:
         litellm_cost_callback({"response_cost": None, "model": "x/y"}, response)
 
     report_state.record_observed_llm_cost.assert_not_called()
+
+
+def test_openrouter_stream_cost_extracts_plain_and_byok_totals() -> None:
+    assert openrouter_stream_cost({"cost": 0.003168}) == pytest.approx(0.003168)
+    assert openrouter_stream_cost(
+        {"cost": 0.01, "is_byok": True, "cost_details": {"upstream_inference_cost": 0.2}}
+    ) == pytest.approx(0.21)
+    # Upstream cost is only added for BYOK responses.
+    assert openrouter_stream_cost(
+        {"cost": 0.05, "is_byok": False, "cost_details": {"upstream_inference_cost": 0.04}}
+    ) == pytest.approx(0.05)
+    assert openrouter_stream_cost({"prompt_tokens": 10}) is None
+    assert openrouter_stream_cost(None) is None
+
+
+def test_cost_callback_recovers_streamed_openrouter_cost_by_response_id() -> None:
+    report_state = MagicMock()
+    remember_streamed_openrouter_cost("gen-abc", {"cost": 0.42})
+    # LiteLLM strips cost from the rebuilt streamed usage; only the id survives.
+    response = SimpleNamespace(id="gen-abc", usage=SimpleNamespace(cost=None), _hidden_params={})
+
+    with (
+        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("litellm.completion_cost", side_effect=ValueError("unknown model")),
+    ):
+        litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)
+
+    report_state.record_observed_llm_cost.assert_called_once_with(0.42)
+    # The entry is consumed so a later response cannot double-count it.
+    assert "gen-abc" not in state_module._streamed_openrouter_costs
+
+
+def test_streamed_openrouter_cost_prefers_provider_report_over_estimate() -> None:
+    report_state = MagicMock()
+    remember_streamed_openrouter_cost("gen-xyz", {"cost": 0.9})
+    response = SimpleNamespace(
+        id="gen-xyz",
+        usage=SimpleNamespace(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        _hidden_params={},
+    )
+
+    with (
+        patch("strix.report.state.get_global_report_state", return_value=report_state),
+        patch("litellm.completion_cost", return_value=0.1) as estimate,
+    ):
+        litellm_cost_callback({"response_cost": None, "model": "moonshotai/kimi-k3"}, response)
+
+    report_state.record_observed_llm_cost.assert_called_once_with(0.9)
+    estimate.assert_not_called()
+
+
+def test_remember_streamed_openrouter_cost_evicts_oldest_over_limit() -> None:
+    limit = state_module._STREAMED_OPENROUTER_COST_LIMIT
+    for i in range(limit + 5):
+        remember_streamed_openrouter_cost(f"gen-{i}", {"cost": 0.001})
+
+    assert len(state_module._streamed_openrouter_costs) == limit
+    assert "gen-0" not in state_module._streamed_openrouter_costs
+    assert f"gen-{limit + 4}" in state_module._streamed_openrouter_costs
+
+
+def test_openrouter_stream_handler_records_cost() -> None:
+    _install_openrouter_stream_cost_capture()
+    handler_cls = (
+        litellm.OpenrouterConfig()
+        .get_model_response_iterator(streaming_response=iter([]), sync_stream=True)
+        .__class__
+    )
+
+    chunk = {
+        "id": "gen-stream",
+        "created": 1,
+        "model": "moonshotai/kimi-k3",
+        "choices": [{"index": 0, "delta": {"content": None}}],
+        "usage": {"prompt_tokens": 89, "completion_tokens": 138, "cost": 0.0035055},
+    }
+    handler = handler_cls(streaming_response=iter([]), sync_stream=True)
+    handler.chunk_parser(chunk)
+
+    assert state_module._streamed_openrouter_costs["gen-stream"] == pytest.approx(0.0035055)
