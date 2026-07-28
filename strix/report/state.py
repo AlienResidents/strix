@@ -2,7 +2,6 @@ import json
 import logging
 import subprocess
 import threading
-from collections import OrderedDict
 from collections.abc import Callable
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
@@ -97,6 +96,8 @@ def get_global_report_state() -> Optional["ReportState"]:
 def set_global_report_state(report_state: "ReportState") -> None:
     global _global_report_state  # noqa: PLW0603
     _global_report_state = report_state
+    # New run: drop any streamed-cost entries a prior run left unconsumed.
+    streamed_openrouter_costs.clear()
 
 
 class ReportState:
@@ -509,18 +510,6 @@ class ReportState:
         self._sync_llm_usage_record()
 
 
-# LiteLLM rebuilds streamed responses from token-only chunks and drops the
-# provider-reported ``usage.cost`` that OpenRouter sends in its final stream
-# chunk (unlike the non-streamed path, which stashes it in hidden params). Since
-# every scan streams, that cost never reaches the callback below. The OpenRouter
-# streaming handler (see strix.config.models) stashes the cost here keyed by the
-# response id so the callback can recover the exact charge for the matching
-# rebuilt response.
-_STREAMED_OPENROUTER_COST_LIMIT = 4096
-_streamed_openrouter_costs: OrderedDict[str, float] = OrderedDict()
-_streamed_openrouter_costs_lock = threading.Lock()
-
-
 def openrouter_stream_cost(usage: Any) -> float | None:
     """Total OpenRouter-reported cost from a raw stream ``usage`` block, or None.
 
@@ -542,28 +531,49 @@ def openrouter_stream_cost(usage: Any) -> float | None:
     return total if total > 0 else None
 
 
-def remember_streamed_openrouter_cost(response_id: Any, usage: Any) -> None:
-    """Record an OpenRouter stream's reported cost so the cost callback can read it."""
-    if not isinstance(response_id, str) or not response_id:
-        return
-    cost = openrouter_stream_cost(usage)
-    if cost is None:
-        return
-    with _streamed_openrouter_costs_lock:
-        _streamed_openrouter_costs[response_id] = cost
-        _streamed_openrouter_costs.move_to_end(response_id)
-        while len(_streamed_openrouter_costs) > _STREAMED_OPENROUTER_COST_LIMIT:
-            _streamed_openrouter_costs.popitem(last=False)
-
-
-def _take_streamed_openrouter_cost(completion_response: Any) -> float | None:
+def _response_id(completion_response: Any) -> str | None:
     response_id = getattr(completion_response, "id", None)
     if response_id is None and isinstance(completion_response, dict):
         response_id = cast("dict[str, Any]", completion_response).get("id")
-    if not isinstance(response_id, str) or not response_id:
-        return None
-    with _streamed_openrouter_costs_lock:
-        return _streamed_openrouter_costs.pop(response_id, None)
+    return response_id if isinstance(response_id, str) and response_id else None
+
+
+class StreamedOpenRouterCosts:
+    """Correlates OpenRouter's per-stream cost from the parser to the cost callback.
+
+    LiteLLM rebuilds streamed responses from token-only chunks and drops the
+    ``usage.cost`` OpenRouter reports in its final stream chunk (its non-streamed
+    path preserves it; streaming snapshots hidden params at stream start). Every
+    scan streams, so the OpenRouter streaming handler (see strix.config.models)
+    records the cost here keyed by response id, and the callback takes it back out
+    for the matching rebuilt response. Entries are removed on read; ``clear()``
+    runs per scan so nothing accumulates across runs.
+    """
+
+    def __init__(self) -> None:
+        self._costs: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def remember(self, response_id: Any, usage: Any) -> None:
+        cost = openrouter_stream_cost(usage)
+        if cost is None or not (isinstance(response_id, str) and response_id):
+            return
+        with self._lock:
+            self._costs[response_id] = cost
+
+    def take(self, completion_response: Any) -> float | None:
+        response_id = _response_id(completion_response)
+        if response_id is None:
+            return None
+        with self._lock:
+            return self._costs.pop(response_id, None)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._costs.clear()
+
+
+streamed_openrouter_costs = StreamedOpenRouterCosts()
 
 
 def litellm_cost_callback(
@@ -603,7 +613,7 @@ def litellm_cost_callback(
     # Recover the exact OpenRouter cost the streaming handler stashed for this
     # response — LiteLLM drops it from streamed usage, so nothing above sees it.
     if cost is None:
-        cost = _take_streamed_openrouter_cost(completion_response)
+        cost = streamed_openrouter_costs.take(completion_response)
 
     if cost is None:
         cost = _estimate_response_cost(kwargs, completion_response)
