@@ -1,7 +1,7 @@
 """Update notifications and self-update for the strix CLI.
 
 Follows the pattern used by tools like gh, uv, and pip: a background,
-rate-limited (once per 24h) check against the release source, a cached
+rate-limited (once per hour) check against the release source, a cached
 result in ``~/.strix``, a non-intrusive notice with the upgrade command
 for the detected install method, and a ``strix --update`` self-update
 path for the standalone binary install.
@@ -37,8 +37,9 @@ logger = logging.getLogger(__name__)
 
 GITHUB_REPO = "usestrix/strix"
 PYPI_PACKAGE = "strix-agent"
-CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+CHECK_INTERVAL_SECONDS = 60 * 60
 REQUEST_TIMEOUT_SECONDS = 5
+PROMPT_JOIN_TIMEOUT_SECONDS = 3.0
 
 _CACHE_PATH = Path.home() / ".strix" / "update-check.json"
 
@@ -175,7 +176,7 @@ def _refresh_cache() -> None:
 
 
 def start_background_check() -> None:
-    """Refresh the cached latest-version info in a daemon thread (at most once per 24h)."""
+    """Refresh the cached latest-version info in a daemon thread (at most once per hour)."""
     global _background_thread  # noqa: PLW0603
     if _is_disabled():
         return
@@ -187,12 +188,16 @@ def start_background_check() -> None:
     _background_thread.start()
 
 
-def get_available_update(*, respect_skip: bool = True) -> str | None:
+def get_available_update(
+    *,
+    respect_skip: bool = True,
+    join_timeout: float = 0.2,
+) -> str | None:
     """Return the newer version from the cache, or None if up to date / unknown."""
     if _is_disabled():
         return None
     if _background_thread is not None:
-        _background_thread.join(timeout=0.2)
+        _background_thread.join(timeout=join_timeout)
     cache = _read_cache()
     latest = cache.get("latest_version")
     current = get_version()
@@ -239,7 +244,7 @@ def prompt_update_if_available(console: Console) -> bool:
 
     Returns True if strix was updated (caller should re-exec / exit).
     """
-    latest = get_available_update()
+    latest = get_available_update(join_timeout=PROMPT_JOIN_TIMEOUT_SECONDS)
     if not latest or not sys.stdin.isatty() or not sys.stdout.isatty():
         return False
     console.print()

@@ -132,6 +132,27 @@ def test_write_cache_preserves_existing_fields() -> None:
     assert cache == {"latest_version": "1.2.3", "checked_at": 123.0, "skipped_version": "9.9.9"}
 
 
+def test_prompt_join_waits_for_fresh_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
+    update_check._CACHE_PATH.write_text(
+        json.dumps({"latest_version": "1.0.0", "checked_at": time.time() - 2 * 60 * 60})
+    )
+    monkeypatch.setattr(update_check, "get_version", lambda: "1.0.0")
+
+    def slow_fetch() -> str:
+        time.sleep(0.5)
+        return "9.9.9"
+
+    monkeypatch.setattr(update_check, "_fetch_latest_version", slow_fetch)
+    update_check.start_background_check()
+    assert update_check.get_available_update(join_timeout=0.0) is None
+    assert (
+        update_check.get_available_update(
+            join_timeout=update_check.PROMPT_JOIN_TIMEOUT_SECONDS,
+        )
+        == "9.9.9"
+    )
+
+
 def test_get_upgrade_command_all_methods() -> None:
     assert update_check.get_upgrade_command("binary") == "strix --update"
     assert update_check.get_upgrade_command("pipx") == "pipx upgrade strix-agent"
