@@ -7,6 +7,8 @@ from unittest.mock import MagicMock, patch
 
 import litellm
 import pytest
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 from strix.config.models import (
     _configure_litellm_compatibility,
@@ -230,11 +232,15 @@ def test_streamed_openrouter_costs_cleared_on_new_run() -> None:
 
 def test_openrouter_stream_handler_records_cost() -> None:
     _install_openrouter_stream_cost_capture()
-    handler_cls = (
-        litellm.OpenrouterConfig()
-        .get_model_response_iterator(streaming_response=iter([]), sync_stream=True)
-        .__class__
+    # Resolve the config the way LiteLLM does in production so we prove the
+    # override is actually reachable through provider resolution, not just as a
+    # directly-constructed class.
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="moonshotai/kimi-k3", provider=LlmProviders.OPENROUTER
     )
+    assert config is not None
+    assert type(config).__name__ == "_StrixOpenrouterConfig"
+    handler = config.get_model_response_iterator(streaming_response=iter([]), sync_stream=True)
 
     chunk = {
         "id": "gen-stream",
@@ -243,7 +249,6 @@ def test_openrouter_stream_handler_records_cost() -> None:
         "choices": [{"index": 0, "delta": {"content": None}}],
         "usage": {"prompt_tokens": 89, "completion_tokens": 138, "cost": 0.0035055},
     }
-    handler = handler_cls(streaming_response=iter([]), sync_stream=True)
     handler.chunk_parser(chunk)
 
     assert streamed_openrouter_costs.take(SimpleNamespace(id="gen-stream")) == pytest.approx(
