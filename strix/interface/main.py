@@ -21,8 +21,10 @@ from rich.text import Text
 from strix.config import (
     apply_config_override,
     codex,
+    grok,
     load_settings,
     persist_current,
+    subscription,
 )
 from strix.config.models import (
     RECOMMENDED_MODEL_NAMES,
@@ -102,6 +104,16 @@ def validate_environment() -> None:
             )
             sys.exit(1)
         logger.info("Environment OK (ChatGPT subscription)")
+        return
+
+    if grok.subscription_model(settings.llm.model):
+        if not grok.is_authenticated():
+            console.print(
+                f"[red]STRIX_LLM={settings.llm.model} uses your Grok subscription, "
+                "but you're not signed in.[/] Run [cyan]strix auth login grok[/] first."
+            )
+            sys.exit(1)
+        logger.info("Environment OK (Grok subscription)")
         return
 
     if not settings.llm.model:
@@ -784,7 +796,7 @@ def _persist_run_record(args: argparse.Namespace) -> None:
         "status": "running",
         "start_time": datetime.now(UTC).isoformat(),
         "end_time": None,
-        "auth_mode": codex.auth_mode(load_settings().llm.model),
+        "auth_mode": subscription.auth_mode(load_settings().llm.model),
         "targets_info": args.targets_info,
         "scan_mode": args.scan_mode,
         "instruction": args.instruction,
@@ -1059,7 +1071,7 @@ def main() -> None:
 
     _telemetry_start_kwargs = {
         "model": load_settings().llm.model,
-        "auth_mode": codex.auth_mode(load_settings().llm.model),
+        "auth_mode": subscription.auth_mode(load_settings().llm.model),
         "scan_mode": args.scan_mode,
         "is_whitebox": is_whitebox_scan(args.targets_info),
         "interactive": not args.non_interactive,

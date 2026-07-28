@@ -261,9 +261,18 @@ def _is_subscription(report_state: Any) -> bool:
     record = getattr(report_state, "run_record", None)
     if isinstance(record, dict) and record.get("auth_mode"):
         return record.get("auth_mode") == "subscription"
-    from strix.config import codex
+    from strix.config import subscription
 
-    return codex.auth_mode(load_settings().llm.model) == "subscription"
+    return subscription.auth_mode(load_settings().llm.model) == "subscription"
+
+
+def _subscription_label() -> str:
+    """Human label for the active model subscription (e.g. "Grok subscription")."""
+    from strix.config import grok
+
+    if grok.subscription_model(load_settings().llm.model):
+        return "Grok subscription"
+    return "ChatGPT subscription"
 
 
 def _int_stat(usage: dict[str, Any], key: str) -> int:
@@ -362,7 +371,7 @@ def build_live_stats_text(report_state: Any) -> Text:
     stats_text.append(str(model), style="white")
     if _is_subscription(report_state):
         stats_text.append("  ·  ", style="dim white")
-        stats_text.append("ChatGPT subscription", style="#22c55e")
+        stats_text.append(_subscription_label(), style="#22c55e")
     stats_text.append("\n")
 
     vuln_count = len(report_state.vulnerability_reports)
@@ -408,7 +417,7 @@ def build_tui_stats_text(report_state: Any) -> Text:
     subscription = _is_subscription(report_state)
     if subscription:
         stats_text.append("\n")
-        stats_text.append("ChatGPT subscription", style="#22c55e")
+        stats_text.append(_subscription_label(), style="#22c55e")
 
     usage = _llm_usage(report_state)
     if usage and _int_stat(usage, "total_tokens") > 0:

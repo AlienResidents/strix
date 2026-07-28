@@ -14,6 +14,7 @@ from agents import (
 )
 from agents.model_settings import ModelSettings
 from agents.models.multi_provider import MultiProvider
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import (
     ModelRetryBackoffSettings,
@@ -23,7 +24,7 @@ from agents.retry import (
 )
 from openai.types.shared import Reasoning
 
-from strix.config import codex
+from strix.config import codex, grok
 from strix.config.loader import load_settings
 
 
@@ -166,6 +167,11 @@ class StrixProvider(MultiProvider):
                 codex.get_subscription_client(),
                 reasoning_effort=load_settings().llm.reasoning_effort,
             )
+        grok_slug = grok.subscription_model(model_name)
+        if grok_slug:
+            # xAI's API is OpenAI chat-completions compatible; the subscription
+            # bearer is stamped per-request by the client's auth hook.
+            return OpenAIChatCompletionsModel(grok_slug, grok.get_subscription_client())
         return super().get_model(model_name)
 
 
@@ -229,7 +235,7 @@ def configure_sdk_model_defaults(settings: Settings) -> None:
     """Apply Strix config to SDK-native defaults."""
     llm = settings.llm
     set_tracing_disabled(True)
-    if codex.subscription_model(llm.model):
+    if codex.subscription_model(llm.model) or grok.subscription_model(llm.model):
         return
     _configure_litellm_compatibility()
     _configure_openrouter_attribution(llm.model)

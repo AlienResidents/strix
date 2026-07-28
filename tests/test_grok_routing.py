@@ -1,0 +1,34 @@
+"""Grok subscription routing through StrixProvider.get_model."""
+
+from __future__ import annotations
+
+from unittest import mock
+
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
+from strix.config import grok
+from strix.config.models import StrixProvider
+
+
+def test_grok_prefix_routes_to_chat_completions(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    client = mock.MagicMock()
+    monkeypatch.setattr(grok, "get_subscription_client", lambda: client)
+
+    model = StrixProvider().get_model("grok/grok-4")
+
+    assert isinstance(model, OpenAIChatCompletionsModel)
+    # The provider strips the grok/ prefix and passes xAI's bare model slug.
+    assert model.model == "grok-4"
+
+
+def test_non_subscription_model_is_not_hijacked_by_grok(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    def _boom() -> object:
+        msg = "grok client must not be built for a non-grok model"
+        raise AssertionError(msg)
+
+    monkeypatch.setattr(grok, "get_subscription_client", _boom)
+
+    # A metered xai/* key model must fall through to the normal provider path,
+    # not the subscription route.
+    model = StrixProvider().get_model("xai/grok-4")
+    assert not (isinstance(model, OpenAIChatCompletionsModel) and model.model == "grok-4")

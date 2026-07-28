@@ -217,6 +217,7 @@ ignore = [
 # args they intentionally ignore.
 "tests/test_viewer_auth.py" = ["S105", "S106", "ARG001"]
 "tests/test_codex_auth.py" = ["S105", "S106", "SLF001"]
+"tests/test_grok_auth.py" = ["S105", "S106", "SLF001"]
 # Stdlib HTTP handler overrides (do_GET/do_POST).
 "strix/interface/auth_cli.py" = ["N802"]
 "tests/test_codex_streaming.py" = ["N802"]
@@ -268,6 +269,7 @@ ignore = [
 # Heavy inference deps (httpx, openai) imported lazily so auth-status checks
 # don't pull them in.
 "strix/config/codex.py" = ["PLC0415"]
+"strix/config/grok.py" = ["PLC0415"]
 # Interface utility branches per scope-mode / target-type combination;
 # splitting would obscure the decision tree without simplifying it.
 "strix/interface/utils.py" = ["PLR0912", "BLE001", "PLC0415"]
