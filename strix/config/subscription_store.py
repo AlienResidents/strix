@@ -28,6 +28,14 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
+class StoreLockError(RuntimeError):
+    """The cross-process store lock could not be acquired.
+
+    Raised instead of silently proceeding, so a read-modify-write never runs
+    unlocked (which would let concurrent provider logins/refreshes/logouts race).
+    """
+
+
 def read(path: Path) -> dict[str, Any]:
     """The store's contents, or an empty dict when absent/unreadable."""
     try:
@@ -79,6 +87,7 @@ class _StoreLock:
 
     def _release_flock(self) -> None:
         handle = self._flock_handle
+        self._flock_handle = None
         if handle is None:
             return
         try:
@@ -90,7 +99,6 @@ class _StoreLock:
             pass
         finally:
             handle.close()
-            self._flock_handle = None
 
 
 _store_lock = _StoreLock()
@@ -101,17 +109,30 @@ def guard(path: Path) -> contextlib.AbstractContextManager[None]:
     return _store_lock.hold(path)
 
 
-def _acquire_flock(path: Path) -> TextIOWrapper | None:
+def _acquire_flock(path: Path) -> TextIOWrapper:
+    """Hold an exclusive cross-process lock on the store, or raise.
+
+    Never returns without the lock held: a missing ``fcntl`` or a failed
+    ``flock`` raises :class:`StoreLockError` so the caller aborts rather than
+    mutating the store unlocked.
+    """
     try:
         import fcntl
-    except ImportError:
-        return None
+    except ImportError as exc:  # pragma: no cover - non-POSIX
+        msg = "cross-process credential locking requires fcntl (a POSIX platform)"
+        raise StoreLockError(msg) from exc
     lock_path = path.with_suffix(".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("w")
     try:
-        lock_path.parent.mkdir(parents=True, exist_ok=True)
-        handle = lock_path.open("w")
-    except OSError:
-        return None
-    with contextlib.suppress(OSError):
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                break
+            except InterruptedError:  # EINTR — retry the blocking acquire
+                continue
+    except OSError as exc:
+        handle.close()
+        msg = f"could not lock {lock_path}: {exc}"
+        raise StoreLockError(msg) from exc
     return handle

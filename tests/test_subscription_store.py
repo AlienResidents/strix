@@ -2,16 +2,17 @@
 
 from __future__ import annotations
 
+import fcntl
 import stat
 from typing import TYPE_CHECKING
+
+import pytest
 
 from strix.config import codex, grok, subscription_store
 
 
 if TYPE_CHECKING:
     from pathlib import Path
-
-    import pytest
 
 
 def test_write_creates_owner_only_file(tmp_path: Path) -> None:
@@ -53,3 +54,21 @@ def test_guard_is_reentrant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     record = grok.read_record()
     assert record is not None
     assert record["access"] == "g"
+
+
+def test_mutation_aborts_when_lock_cannot_be_acquired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store = tmp_path / ".strix" / "subscription-auth.json"
+    monkeypatch.setattr(grok, "AUTH_PATH", store)
+
+    def _no_lock(*_args: object, **_kwargs: object) -> None:
+        raise OSError("no locks available")
+
+    monkeypatch.setattr(fcntl, "flock", _no_lock)
+
+    # Rather than silently doing an unlocked read-modify-write, the store raises
+    # and writes nothing.
+    with pytest.raises(subscription_store.StoreLockError):
+        grok.save_record({"type": "oauth", "access": "g", "refresh": "r"})
+    assert not store.exists()
