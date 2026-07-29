@@ -129,7 +129,15 @@ def _acquire_flock(path: Path) -> TextIOWrapper:
         raise StoreLockError(msg) from exc
     lock_path = path.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
-    handle = lock_path.open("w")
+    # O_NOFOLLOW rejects a pre-positioned symlink at the predictable lock path
+    # (so an attacker can't redirect the open), and no O_TRUNC since the lock
+    # file is only an flock anchor whose contents we never use.
+    try:
+        fd = os.open(str(lock_path), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    except OSError as exc:
+        msg = f"could not open lock file {lock_path}: {exc}"
+        raise StoreLockError(msg) from exc
+    handle = os.fdopen(fd, "r+")
     try:
         while True:
             try:

@@ -88,3 +88,20 @@ def test_mutation_aborts_when_lock_cannot_be_acquired(
     with pytest.raises(subscription_store.StoreLockError):
         grok.save_record({"type": "oauth", "access": "g", "refresh": "r"})
     assert not store.exists()
+
+
+def test_lock_file_rejects_a_pre_positioned_symlink(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    store_dir = tmp_path / ".strix"
+    store_dir.mkdir()
+    store = store_dir / "subscription-auth.json"
+    monkeypatch.setattr(grok, "AUTH_PATH", store)
+    # Attacker pre-plants a symlink where the lock file would be created.
+    outside = tmp_path / "attacker-target"
+    store.with_suffix(".lock").symlink_to(outside)
+
+    with pytest.raises(subscription_store.StoreLockError):
+        grok.save_record({"type": "oauth", "access": "g", "refresh": "r"})
+    # The symlink target was never created/truncated through the lock open.
+    assert not outside.exists()
