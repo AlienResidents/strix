@@ -33,6 +33,7 @@ from strix.config.models import (
 )
 from strix.core.inputs import DEFAULT_MAX_TURNS
 from strix.core.paths import run_dir_for, runtime_state_dir
+from strix.core.warmup import ToolCallingUnsupportedError, probe_tool_calling
 from strix.interface.cli import run_cli
 from strix.interface.tui import run_tui
 from strix.interface.update_check import (
@@ -422,6 +423,27 @@ async def warm_up_llm(show_model_warning: bool = True) -> None:
             )
             logger.info("LLM warm-up succeeded for dedupe model %s", dedupe_model)
 
+        raw_model = (llm.model or "").strip()
+        await probe_tool_calling(raw_model, settings, request_timeout=llm.timeout)
+
+    except ToolCallingUnsupportedError as e:
+        logger.debug("Tool-call probe failed", exc_info=True)
+        error_text = Text()
+        error_text.append("TOOL CALLING NOT SUPPORTED", style="bold red")
+        error_text.append("\n\n", style="white")
+        error_text.append(str(e), style="white")
+        console.print("\n")
+        console.print(
+            Panel(
+                error_text,
+                title="[bold white]STRIX",
+                title_align="left",
+                border_style="red",
+                padding=(1, 2),
+            ),
+        )
+        console.print()
+        sys.exit(1)
     except Exception as e:
         logger.debug("LLM warm-up failed", exc_info=True)
         error_text = Text()
