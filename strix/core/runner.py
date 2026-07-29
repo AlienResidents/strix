@@ -248,6 +248,7 @@ async def run_strix_scan(
             settings.llm.reasoning_effort,
             model_name=resolved_model,
             force_required_tool_choice=settings.llm.force_required_tool_choice,
+            custom_api_base=bool(settings.llm.api_base),
             request_timeout=settings.llm.timeout,
             prompt_cache=settings.llm.prompt_cache,
         )

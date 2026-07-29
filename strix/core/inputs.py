@@ -129,7 +129,8 @@ def make_model_settings(
     reasoning_effort: ReasoningEffort | None,
     *,
     model_name: str,
-    force_required_tool_choice: bool = False,
+    force_required_tool_choice: bool | None = None,
+    custom_api_base: bool = False,
     request_timeout: float | None = None,
     prompt_cache: bool = True,
 ) -> ModelSettings:
@@ -147,7 +148,14 @@ def make_model_settings(
         model_settings = model_settings.resolve(
             ModelSettings(reasoning=Reasoning(effort=reasoning_effort)),
         )
-    if force_required_tool_choice and _accepts_required_tool_choice(model_name):
+    # Strix is fully tool-driven, so a turn that returns prose instead of a tool
+    # call stalls the scan. Reasoning models on OpenAI-compatible custom
+    # endpoints (e.g. GLM / Kimi via cortecs) do exactly that under the default
+    # ``auto`` tool choice, so default to ``required`` there; ``None`` means auto.
+    use_required = (
+        custom_api_base if force_required_tool_choice is None else force_required_tool_choice
+    )
+    if use_required and _accepts_required_tool_choice(model_name):
         model_settings = model_settings.resolve(ModelSettings(tool_choice="required"))
 
     cache_extra_args = _prompt_cache_extra_args(model_name) if prompt_cache else None

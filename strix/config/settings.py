@@ -36,8 +36,11 @@ class LlmSettings(BaseSettings):
         ),
     )
     reasoning_effort: ReasoningEffort = Field(default="high", alias="STRIX_REASONING_EFFORT")
-    force_required_tool_choice: bool = Field(
-        default=False,
+    # None = auto: force required tool choice on OpenAI-compatible custom
+    # endpoints (where reasoning models otherwise burn tokens thinking without
+    # ever calling a tool), off elsewhere. True/False overrides explicitly.
+    force_required_tool_choice: bool | None = Field(
+        default=None,
         alias="STRIX_FORCE_REQUIRED_TOOL_CHOICE",
     )
     prompt_cache: bool = Field(

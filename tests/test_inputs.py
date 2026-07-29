@@ -255,6 +255,44 @@ def test_make_model_settings_forces_required_for_anyllm_routed_openai_model() ->
     assert settings.tool_choice == "required"
 
 
+def test_make_model_settings_auto_forces_required_on_custom_openai_endpoint() -> None:
+    # GLM / Kimi via cortecs: openai/-routed reasoning model on a custom base.
+    settings = make_model_settings(
+        None,
+        model_name="openai/glm-5.2",
+        custom_api_base=True,
+    )
+
+    assert settings.tool_choice == "required"
+
+
+def test_make_model_settings_auto_skips_required_without_custom_endpoint() -> None:
+    settings = make_model_settings(None, model_name="openai/glm-5.2")
+
+    assert settings.tool_choice is None
+
+
+def test_make_model_settings_explicit_false_overrides_custom_endpoint() -> None:
+    settings = make_model_settings(
+        None,
+        model_name="openai/glm-5.2",
+        force_required_tool_choice=False,
+        custom_api_base=True,
+    )
+
+    assert settings.tool_choice is None
+
+
+def test_make_model_settings_auto_skips_required_for_non_openai_custom_endpoint() -> None:
+    settings = make_model_settings(
+        None,
+        model_name="anthropic/claude-3-7-sonnet-latest",
+        custom_api_base=True,
+    )
+
+    assert settings.tool_choice is None
+
+
 def test_make_model_settings_sets_request_timeout() -> None:
     settings = make_model_settings(
         "none",
