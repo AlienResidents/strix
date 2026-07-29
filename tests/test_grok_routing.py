@@ -6,8 +6,9 @@ from unittest import mock
 
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
-from strix.config import grok
+from strix.config import grok, subscription
 from strix.config.models import StrixProvider
+from strix.report import state as state_mod
 
 
 def test_grok_prefix_routes_to_chat_completions(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -32,3 +33,21 @@ def test_non_subscription_model_is_not_hijacked_by_grok(monkeypatch) -> None:  #
     # not the subscription route.
     model = StrixProvider().get_model("xai/grok-4")
     assert not (isinstance(model, OpenAIChatCompletionsModel) and model.model == "grok-4")
+
+
+def test_provider_label_names_the_subscription() -> None:
+    assert subscription.provider_label("grok/grok-4") == "Grok"
+    assert subscription.provider_label("chatgpt/gpt-5.4") == "ChatGPT"
+    # Metered API-key models are not subscriptions.
+    assert subscription.provider_label("xai/grok-4") is None
+    assert subscription.provider_label("openai/gpt-5.4") is None
+
+
+def test_run_record_reports_grok_provider(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    settings = mock.MagicMock()
+    settings.llm.model = "grok/grok-4"
+    monkeypatch.setattr(state_mod, "load_settings", lambda: settings)
+
+    record = state_mod.ReportState(run_name="run-test").run_record
+    assert record["auth_mode"] == "subscription"
+    assert record["subscription_provider"] == "Grok"

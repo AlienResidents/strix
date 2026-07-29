@@ -19,6 +19,9 @@ if TYPE_CHECKING:
 
 _PROVIDERS: tuple[ModuleType, ...] = (codex, grok)
 
+# Human-facing provider names keyed by each module's ``PROVIDER`` constant.
+_DISPLAY_NAMES: dict[str, str] = {codex.PROVIDER: "ChatGPT", grok.PROVIDER: "Grok"}
+
 
 def provider_for_model(model_name: str | None) -> ModuleType | None:
     """Return the subscription provider module that owns ``model_name``'s prefix,
@@ -31,3 +34,12 @@ def provider_for_model(model_name: str | None) -> ModuleType | None:
 
 def auth_mode(model_name: str | None) -> str:
     return "subscription" if provider_for_model(model_name) is not None else "api_key"
+
+
+def provider_label(model_name: str | None) -> str | None:
+    """Human-facing name of the subscription provider for ``model_name`` (e.g.
+    "ChatGPT" or "Grok"), or None when the model isn't a subscription model."""
+    provider = provider_for_model(model_name)
+    if provider is None:
+        return None
+    return _DISPLAY_NAMES.get(provider.PROVIDER)
