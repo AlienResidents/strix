@@ -22,7 +22,7 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
 
-from strix.config import codex, grok, load_settings
+from strix.config import codex, grok, load_settings, subscription_store
 
 
 if TYPE_CHECKING:
@@ -346,8 +346,11 @@ def _logout(console: Console, argv: list[str]) -> int:
         return int(exc.code or 2)
 
     if args.provider is None:
-        for provider in _PROVIDERS.values():
-            provider.module.logout()
+        # Hold the store lock across every provider so a concurrent save/refresh
+        # can't slip a credential back in between removals (logout-all is atomic).
+        with subscription_store.guard(codex.AUTH_PATH):
+            for provider in _PROVIDERS.values():
+                provider.module.logout()
         console.print("[green]Signed out.[/] Stored subscription credentials removed.")
         return 0
 

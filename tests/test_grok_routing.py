@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import argparse
+import importlib
 from unittest import mock
 
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
@@ -10,6 +12,11 @@ from strix.config import grok, subscription
 from strix.config.models import StrixProvider
 from strix.interface import utils
 from strix.report import state as state_mod
+
+
+# ``strix.interface.__init__`` binds ``main`` to the entrypoint function, so
+# ``from strix.interface import main`` returns that function, not the module.
+main_mod = importlib.import_module("strix.interface.main")
 
 
 def test_grok_prefix_routes_to_chat_completions(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -69,3 +76,29 @@ def test_subscription_label_prefers_persisted_provider(monkeypatch) -> None:  # 
     # hardcoded default).
     fresh = mock.MagicMock(run_record={})
     assert utils._subscription_label(fresh) == "ChatGPT subscription"
+
+
+def test_persisted_run_record_carries_provider(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    settings = mock.MagicMock()
+    settings.llm.model = "grok/grok-4"
+    monkeypatch.setattr(main_mod, "load_settings", lambda: settings)
+    monkeypatch.setattr(main_mod, "run_dir_for", lambda _name: tmp_path)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(main_mod, "write_run_record", lambda _dir, rec: captured.update(rec))
+
+    args = argparse.Namespace(
+        run_name="run-test",
+        targets_info=[],
+        scan_mode="scan",
+        instruction=None,
+        non_interactive=True,
+        local_sources=[],
+        diff_scope={"active": False},
+        scope_mode="mode",
+        diff_base=None,
+    )
+    main_mod._persist_run_record(args)
+
+    # The resume/viewer record must carry the provider so resumed runs stay labeled.
+    assert captured["auth_mode"] == "subscription"
+    assert captured["subscription_provider"] == "Grok"

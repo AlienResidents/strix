@@ -790,13 +790,15 @@ Examples:
 def _persist_run_record(args: argparse.Namespace) -> None:
     run_dir = run_dir_for(args.run_name)
     run_dir.mkdir(parents=True, exist_ok=True)
+    model = load_settings().llm.model
     run_record = {
         "run_id": args.run_name,
         "run_name": args.run_name,
         "status": "running",
         "start_time": datetime.now(UTC).isoformat(),
         "end_time": None,
-        "auth_mode": subscription.auth_mode(load_settings().llm.model),
+        "auth_mode": subscription.auth_mode(model),
+        "subscription_provider": subscription.provider_label(model),
         "targets_info": args.targets_info,
         "scan_mode": args.scan_mode,
         "instruction": args.instruction,

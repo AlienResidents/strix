@@ -95,6 +95,31 @@ def test_model_subcommand_removed() -> None:
     assert auth_cli.run_auth(["model", "gpt-5.5"]) == 2
 
 
+def _sign_in_both() -> None:
+    codex.save_record({"type": "oauth", "access": "c", "refresh": "r", "account_id": "a"})
+    grok.save_record({"type": "oauth", "access": "g", "refresh": "r"})
+
+
+def test_logout_all_removes_every_provider() -> None:
+    _sign_in_both()
+    assert codex.is_authenticated()
+    assert grok.is_authenticated()
+
+    assert auth_cli.run_auth(["logout"]) == 0
+
+    assert not codex.is_authenticated()
+    assert not grok.is_authenticated()
+
+
+def test_logout_single_provider_leaves_the_other() -> None:
+    _sign_in_both()
+
+    assert auth_cli.run_auth(["logout", "grok"]) == 0
+
+    assert codex.is_authenticated()
+    assert not grok.is_authenticated()
+
+
 @pytest.mark.parametrize("provider", ["chatgpt", "codex", "ChatGPT"])
 def test_login_accepts_provider_aliases(provider: str, monkeypatch: pytest.MonkeyPatch) -> None:
     reached = {"flow": False}
