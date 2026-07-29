@@ -8,6 +8,7 @@ from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
 from strix.config import grok, subscription
 from strix.config.models import StrixProvider
+from strix.interface import utils
 from strix.report import state as state_mod
 
 
@@ -51,3 +52,20 @@ def test_run_record_reports_grok_provider(monkeypatch) -> None:  # type: ignore[
     record = state_mod.ReportState(run_name="run-test").run_record
     assert record["auth_mode"] == "subscription"
     assert record["subscription_provider"] == "Grok"
+
+
+def test_subscription_label_prefers_persisted_provider(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    settings = mock.MagicMock()
+    settings.llm.model = "chatgpt/gpt-5.4"  # current settings point at ChatGPT
+    monkeypatch.setattr(utils, "load_settings", lambda: settings)
+
+    # A resumed Grok run keeps its persisted provider even though settings changed.
+    resumed = mock.MagicMock(
+        run_record={"auth_mode": "subscription", "subscription_provider": "Grok"}
+    )
+    assert utils._subscription_label(resumed) == "Grok subscription"
+
+    # With no persisted provider, it derives the label from settings (not a
+    # hardcoded default).
+    fresh = mock.MagicMock(run_record={})
+    assert utils._subscription_label(fresh) == "ChatGPT subscription"
