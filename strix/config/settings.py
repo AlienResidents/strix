@@ -40,6 +40,12 @@ class LlmSettings(BaseSettings):
         default=False,
         alias="STRIX_FORCE_REQUIRED_TOOL_CHOICE",
     )
+    # Custom OpenAI-compatible endpoints (api_base) run non-streamed by default
+    # because many stream tool calls incorrectly. Set to 1 to force streaming.
+    stream_custom_endpoint: bool = Field(
+        default=False,
+        alias="STRIX_STREAM_CUSTOM_ENDPOINT",
+    )
     prompt_cache: bool = Field(
         default=True,
         alias="STRIX_PROMPT_CACHE",

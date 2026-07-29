@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import inspect
 import os
+import time
 from typing import TYPE_CHECKING, Any
 
 from agents import (
@@ -13,6 +14,8 @@ from agents import (
     set_tracing_disabled,
 )
 from agents.model_settings import ModelSettings
+from agents.models.fake_id import FAKE_RESPONSES_ID
+from agents.models.interface import Model
 from agents.models.multi_provider import MultiProvider
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.retry import (
@@ -20,6 +23,12 @@ from agents.retry import (
     ModelRetrySettings,
     RetryPolicyContext,
     retry_policies,
+)
+from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseOutputItemDoneEvent,
+    ResponseUsage,
 )
 from openai.types.shared import Reasoning
 
@@ -30,8 +39,14 @@ from strix.config.loader import load_settings
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from agents.models.interface import Model, ModelProvider
+    from agents.agent_output import AgentOutputSchemaBase
+    from agents.handoffs import Handoff
+    from agents.items import ModelResponse, TResponseInputItem, TResponseStreamEvent
+    from agents.models.interface import ModelProvider, ModelTracing
+    from agents.tool import Tool
+    from agents.usage import Usage
     from openai import AsyncOpenAI
+    from openai.types.responses import ResponsePromptParam
 
     from strix.config.settings import ReasoningEffort, Settings
 
@@ -135,6 +150,94 @@ class _CodexResponsesModel(OpenAIResponsesModel):
                     await result
 
 
+def _to_response_usage(usage: Usage | None) -> ResponseUsage | None:
+    if usage is None:
+        return None
+    return ResponseUsage(
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        total_tokens=usage.total_tokens,
+        input_tokens_details=usage.input_tokens_details,
+        output_tokens_details=usage.output_tokens_details,
+    )
+
+
+class _NonStreamingModel(Model):
+    """Run a model non-streamed but expose the streaming interface the runner uses.
+
+    Some OpenAI-compatible endpoints (e.g. cortecs serving GLM / Kimi) return valid
+    ``tool_calls`` for a non-streamed completion but, when streamed, emit the tool
+    call as plain text or drop it and close the stream — leaving Strix's tool-driven
+    loop with nothing to execute. For those endpoints we make the real request
+    non-streamed (where tool calling works) and synthesize the minimal event
+    sequence the runner consumes from a stream, so the rest of the pipeline is
+    unchanged. The only user-visible difference is no token-by-token output.
+    """
+
+    def __init__(self, inner: Model) -> None:
+        self._inner = inner
+
+    async def get_response(self, *args: Any, **kwargs: Any) -> ModelResponse:
+        return await self._inner.get_response(*args, **kwargs)
+
+    async def stream_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None = None,
+        conversation_id: str | None = None,
+        prompt: ResponsePromptParam | None = None,
+    ) -> AsyncIterator[TResponseStreamEvent]:
+        model_response = await self._inner.get_response(
+            system_instructions,
+            input,
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+
+        sequence = 0
+        for index, item in enumerate(model_response.output):
+            yield ResponseOutputItemDoneEvent(
+                item=item,
+                output_index=index,
+                type="response.output_item.done",
+                sequence_number=sequence,
+            )
+            sequence += 1
+
+        response = Response(
+            id=model_response.response_id or FAKE_RESPONSES_ID,
+            created_at=time.time(),
+            model=str(getattr(self._inner, "model", "")),
+            object="response",
+            output=model_response.output,
+            tool_choice="auto",
+            tools=[],
+            parallel_tool_calls=False,
+            usage=_to_response_usage(model_response.usage),
+        )
+        yield ResponseCompletedEvent(
+            response=response,
+            type="response.completed",
+            sequence_number=sequence,
+        )
+
+    def get_retry_advice(self, request: Any) -> Any:
+        return self._inner.get_retry_advice(request)
+
+
 class StrixProvider(MultiProvider):
     """Route any non-OpenAI prefix through LiteLLM with the prefix preserved,
     so users type ``deepseek/deepseek-chat`` rather than
@@ -159,14 +262,20 @@ class StrixProvider(MultiProvider):
         return self._get_fallback_provider("litellm"), original_model_name
 
     def get_model(self, model_name: str | None) -> Model:
+        settings = load_settings()
         slug = codex.subscription_model(model_name)
         if slug:
             return _CodexResponsesModel(
                 slug,
                 codex.get_subscription_client(),
-                reasoning_effort=load_settings().llm.reasoning_effort,
+                reasoning_effort=settings.llm.reasoning_effort,
             )
-        return super().get_model(model_name)
+        model = super().get_model(model_name)
+        # Custom OpenAI-compatible endpoints often stream tool calls incorrectly
+        # (see _NonStreamingModel); run them non-streamed unless explicitly opted in.
+        if settings.llm.api_base and settings.llm.stream_custom_endpoint is False:
+            return _NonStreamingModel(model)
+        return model
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(
