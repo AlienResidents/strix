@@ -23,6 +23,22 @@ def test_write_creates_owner_only_file(tmp_path: Path) -> None:
     assert not path.with_suffix(".json.tmp").exists()
 
 
+def test_write_does_not_follow_a_symlink_at_target(tmp_path: Path) -> None:
+    store_dir = tmp_path / ".strix"
+    store_dir.mkdir()
+    outside = tmp_path / "attacker-target.json"
+    path = store_dir / "subscription-auth.json"
+    path.symlink_to(outside)  # attacker pre-plants a symlink at the store path
+
+    subscription_store.write(path, {"grok": {"type": "oauth", "access": "a", "refresh": "r"}})
+
+    # The atomic rename replaced the symlink with a real file; nothing was
+    # written through it to the attacker-chosen location.
+    assert not path.is_symlink()
+    assert not outside.exists()
+    assert subscription_store.read(path)["grok"]["access"] == "a"
+
+
 def test_providers_share_store_without_clobbering(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

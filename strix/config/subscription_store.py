@@ -18,14 +18,15 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import tempfile
 import threading
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
     from io import TextIOWrapper
-    from pathlib import Path
 
 
 class StoreLockError(RuntimeError):
@@ -46,18 +47,23 @@ def read(path: Path) -> dict[str, Any]:
 
 
 def write(path: Path, data: dict[str, Any]) -> None:
-    """Atomically replace the store, owner-only from creation."""
+    """Atomically replace the store, owner-only from creation.
+
+    The temp file is created with a random name via ``mkstemp`` (mode 0600, no
+    symlink following), so a local attacker can't pre-plant a symlink at a
+    predictable path to divert the token write.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".json.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name, suffix=".tmp")
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
+        tmp.replace(path)
     except BaseException:
         with contextlib.suppress(OSError):
             tmp.unlink()
         raise
-    tmp.replace(path)
     with contextlib.suppress(OSError):
         path.chmod(0o600)
 
