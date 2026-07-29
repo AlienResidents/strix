@@ -165,13 +165,14 @@ def _to_response_usage(usage: Usage | None) -> ResponseUsage | None:
 class _NonStreamingModel(Model):
     """Run a model non-streamed but expose the streaming interface the runner uses.
 
-    Some OpenAI-compatible endpoints (e.g. cortecs serving GLM / Kimi) return valid
-    ``tool_calls`` for a non-streamed completion but, when streamed, emit the tool
-    call as plain text or drop it and close the stream — leaving Strix's tool-driven
-    loop with nothing to execute. For those endpoints we make the real request
-    non-streamed (where tool calling works) and synthesize the minimal event
-    sequence the runner consumes from a stream, so the rest of the pipeline is
-    unchanged. The only user-visible difference is no token-by-token output.
+    Some OpenAI-compatible endpoints (notably gateways serving reasoning models)
+    return valid ``tool_calls`` for a non-streamed completion but, when streamed,
+    emit the tool call as plain text or drop it and close the stream — leaving
+    Strix's tool-driven loop with nothing to execute. For those endpoints we make
+    the real request non-streamed (where tool calling works) and synthesize the
+    minimal event sequence the runner consumes from a stream, so the rest of the
+    pipeline is unchanged. The only user-visible difference is no token-by-token
+    output.
     """
 
     def __init__(self, inner: Model) -> None:
