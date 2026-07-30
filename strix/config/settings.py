@@ -9,6 +9,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 ReasoningEffort = Literal["none", "minimal", "low", "medium", "high", "xhigh"]
+StreamMode = Literal["auto", "always", "never"]
 
 _BASE_CONFIG = SettingsConfigDict(
     case_sensitive=False,
@@ -40,11 +41,11 @@ class LlmSettings(BaseSettings):
         default=False,
         alias="STRIX_FORCE_REQUIRED_TOOL_CHOICE",
     )
-    # Custom OpenAI-compatible endpoints (api_base) run non-streamed by default
-    # because many stream tool calls incorrectly. Set to 1 to force streaming.
-    stream_custom_endpoint: bool = Field(
-        default=False,
-        alias="STRIX_STREAM_CUSTOM_ENDPOINT",
+    # auto/always stream; never runs non-streamed, for endpoints that stream tool
+    # calls incorrectly (some OpenAI-compatible gateways serving reasoning models).
+    stream_mode: StreamMode = Field(
+        default="auto",
+        alias="STRIX_STREAM_MODE",
     )
     prompt_cache: bool = Field(
         default=True,

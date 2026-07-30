@@ -168,11 +168,11 @@ class _NonStreamingModel(Model):
     Some OpenAI-compatible endpoints (notably gateways serving reasoning models)
     return valid ``tool_calls`` for a non-streamed completion but, when streamed,
     emit the tool call as plain text or drop it and close the stream — leaving
-    Strix's tool-driven loop with nothing to execute. For those endpoints we make
-    the real request non-streamed (where tool calling works) and synthesize the
-    minimal event sequence the runner consumes from a stream, so the rest of the
-    pipeline is unchanged. The only user-visible difference is no token-by-token
-    output.
+    Strix's tool-driven loop with nothing to execute. Selecting
+    ``STRIX_STREAM_MODE=never`` routes through this wrapper, which makes the real
+    request non-streamed (where tool calling works) and synthesizes the minimal
+    event sequence the runner consumes from a stream, so the rest of the pipeline
+    is unchanged. The only user-visible difference is no token-by-token output.
     """
 
     def __init__(self, inner: Model) -> None:
@@ -239,6 +239,10 @@ class _NonStreamingModel(Model):
         return self._inner.get_retry_advice(request)
 
 
+def _should_run_non_streamed(settings: Settings) -> bool:
+    return settings.llm.stream_mode == "never"
+
+
 class StrixProvider(MultiProvider):
     """Route any non-OpenAI prefix through LiteLLM with the prefix preserved,
     so users type ``deepseek/deepseek-chat`` rather than
@@ -272,9 +276,7 @@ class StrixProvider(MultiProvider):
                 reasoning_effort=settings.llm.reasoning_effort,
             )
         model = super().get_model(model_name)
-        # Custom OpenAI-compatible endpoints often stream tool calls incorrectly
-        # (see _NonStreamingModel); run them non-streamed unless explicitly opted in.
-        if settings.llm.api_base and settings.llm.stream_custom_endpoint is False:
+        if _should_run_non_streamed(settings):
             return _NonStreamingModel(model)
         return model
 

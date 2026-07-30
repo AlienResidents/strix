@@ -52,12 +52,12 @@ class _FakeModel(Model):
         raise AssertionError("inner stream_response must never be called")
 
 
-def _settings(*, api_base: str | None, stream_custom_endpoint: bool = False) -> SimpleNamespace:
+def _settings(*, api_base: str | None, stream_mode: str = "auto") -> SimpleNamespace:
     return SimpleNamespace(
         llm=SimpleNamespace(
             model="openai/glm",
             api_base=api_base,
-            stream_custom_endpoint=stream_custom_endpoint,
+            stream_mode=stream_mode,
             reasoning_effort="high",
         )
     )
@@ -131,7 +131,7 @@ async def test_stream_response_delegates_get_response() -> None:
     assert inner.get_response_calls == 1
 
 
-def test_get_model_wraps_custom_endpoint() -> None:
+def test_get_model_auto_streams_custom_endpoint() -> None:
     sentinel = _FakeModel(ModelResponse(output=[], usage=Usage(), response_id=None))
     with (
         patch("strix.config.models.load_settings", return_value=_settings(api_base="http://x/v1")),
@@ -141,10 +141,10 @@ def test_get_model_wraps_custom_endpoint() -> None:
         ),
     ):
         model = StrixProvider().get_model("openai/glm")
-    assert isinstance(model, _NonStreamingModel)
+    assert model is sentinel
 
 
-def test_get_model_hosted_stays_streamed() -> None:
+def test_get_model_auto_streams_hosted() -> None:
     sentinel = _FakeModel(ModelResponse(output=[], usage=Usage(), response_id=None))
     with (
         patch("strix.config.models.load_settings", return_value=_settings(api_base="")),
@@ -157,12 +157,12 @@ def test_get_model_hosted_stays_streamed() -> None:
     assert model is sentinel
 
 
-def test_get_model_opt_out_keeps_streaming() -> None:
+def test_get_model_stream_mode_never_wraps() -> None:
     sentinel = _FakeModel(ModelResponse(output=[], usage=Usage(), response_id=None))
     with (
         patch(
             "strix.config.models.load_settings",
-            return_value=_settings(api_base="http://x/v1", stream_custom_endpoint=True),
+            return_value=_settings(api_base="http://x/v1", stream_mode="never"),
         ),
         patch(
             "agents.models.multi_provider.MultiProvider.get_model",
@@ -170,4 +170,4 @@ def test_get_model_opt_out_keeps_streaming() -> None:
         ),
     ):
         model = StrixProvider().get_model("openai/glm")
-    assert model is sentinel
+    assert isinstance(model, _NonStreamingModel)
