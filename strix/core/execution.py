@@ -603,6 +603,11 @@ async def _run_cycle(  # noqa: PLR0912, PLR0915
                 return await _handle_content_guardrail(
                     coordinator, agent_id, exc, interactive=interactive
                 )
+            if isinstance(exc, ProviderRefusalError):
+                logger.warning("agent %s refused by the model provider: %s", agent_id, exc)
+                await coordinator.set_status(agent_id, "failed", error=str(exc))
+                await _notify_parent_on_terminal(coordinator, agent_id, "failed")
+                return None
             if not interactive:
                 raise
             if isinstance(exc, MaxTurnsExceeded):

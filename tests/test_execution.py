@@ -600,6 +600,41 @@ async def test_structured_provider_refusal_fails_interactive_agent(
 
 
 @pytest.mark.asyncio
+async def test_structured_provider_refusal_fails_noninteractive_child(
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    refusal = "This request was blocked under the provider's usage policy."
+    stream = _StructuredRefusalStream(refusal)
+    monkeypatch.setattr(execution.Runner, "run_streamed", lambda *_args, **_kwargs: stream)
+    coordinator = AgentCoordinator()
+    await coordinator.register("root", "strix", parent_id=None)
+    await coordinator.register("child", "recon", parent_id="root")
+    session = SQLiteSession("root", tmp_path / "agents.db")
+    await coordinator.attach_runtime("root", session=session)
+
+    result = await execution._run_cycle(
+        MagicMock(),
+        coordinator,
+        "child",
+        input_data="task",
+        run_config=MagicMock(),
+        context={"parent_id": "root"},
+        max_turns=5,
+        session=None,
+        interactive=False,
+        event_sink=None,
+        hooks=None,
+    )
+
+    assert result is None
+    assert coordinator.statuses["child"] == "failed"
+    assert coordinator.errors["child"] == refusal
+    assert coordinator.pending_counts.get("root", 0) > 0
+    session.close()
+
+
+@pytest.mark.asyncio
 async def test_resume_revives_guardrail_parked_child_but_not_plain_waiting(
     tmp_path: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
