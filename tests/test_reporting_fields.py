@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -141,7 +141,7 @@ async def test_create_report_rejects_invalid_fix_effort(report_state: ReportStat
     assert not report_state.vulnerability_reports
 
 
-async def _create_with(report_state: ReportState, **overrides: object) -> dict[str, object]:
+async def _create_with(report_state: ReportState, **overrides: object) -> dict[str, Any]:
     kwargs: dict[str, object] = {
         "title": "X",
         "description": "d",
@@ -172,7 +172,7 @@ async def _create_with(report_state: ReportState, **overrides: object) -> dict[s
 async def test_create_report_requires_counterevidence(report_state: ReportState) -> None:
     result = await _create_with(report_state, counterevidence="   ")
     assert result["success"] is False
-    assert any("Counterevidence" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("Counterevidence" in e for e in result["errors"])
     assert not report_state.vulnerability_reports
 
 
@@ -181,14 +181,14 @@ async def test_create_report_requires_severity_change_conditions(
 ) -> None:
     result = await _create_with(report_state, severity_change_conditions="")
     assert result["success"] is False
-    assert any("severity_change_conditions" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("severity_change_conditions" in e for e in result["errors"])
     assert not report_state.vulnerability_reports
 
 
 async def test_create_report_rejects_invalid_confidence(report_state: ReportState) -> None:
     result = await _create_with(report_state, confidence="pretty sure")
     assert result["success"] is False
-    assert any("confidence" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("confidence" in e for e in result["errors"])
     assert not report_state.vulnerability_reports
 
 
@@ -197,7 +197,7 @@ async def test_create_report_requires_rationale_when_confidence_not_high(
 ) -> None:
     result = await _create_with(report_state, confidence="medium")
     assert result["success"] is False
-    assert any("confidence_rationale" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("confidence_rationale" in e for e in result["errors"])
     assert not report_state.vulnerability_reports
 
 
@@ -669,7 +669,7 @@ _INFO_LOCATION = {
 async def test_fix_after_requires_verification(report_state: ReportState) -> None:
     result = await _create_with(report_state, code_locations=[_FIX_LOCATION])
     assert result["success"] is False
-    assert any("fix_verification" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("fix_verification" in e for e in result["errors"])
     assert not report_state.vulnerability_reports
 
 

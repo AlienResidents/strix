@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -26,7 +26,7 @@ def coverage_store(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _record(**overrides: str) -> dict[str, object]:
+def _record(**overrides: str) -> dict[str, Any]:
     kwargs = {
         "surface": "POST /api/orders/{id}",
         "risk_area": "object-level authorization",
@@ -36,7 +36,7 @@ def _record(**overrides: str) -> dict[str, object]:
         "agent_name": "authz-tester",
     }
     kwargs.update(overrides)
-    return _record_impl(**kwargs)  # type: ignore[arg-type]
+    return _record_impl(**kwargs)
 
 
 def test_record_persists_entry(coverage_store: Path) -> None:
@@ -59,14 +59,14 @@ def test_record_normalizes_outcome() -> None:
 def test_record_rejects_unknown_outcome() -> None:
     result = _record(outcome="looks fine")
     assert result["success"] is False
-    assert any("Invalid outcome" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("Invalid outcome" in e for e in result["errors"])
     assert not get_coverage_entries()
 
 
 def test_record_requires_surface_and_risk_area() -> None:
     result = _record(surface="  ", risk_area="")
     assert result["success"] is False
-    joined = " ".join(result["errors"])  # type: ignore[arg-type]
+    joined = " ".join(result["errors"])
     assert "surface" in joined
     assert "risk_area" in joined
 
@@ -75,7 +75,7 @@ def test_record_requires_surface_and_risk_area() -> None:
 def test_evidence_required_for_asserted_outcomes(outcome: str) -> None:
     result = _record(outcome=outcome, evidence="   ")
     assert result["success"] is False
-    assert any("evidence is required" in e for e in result["errors"])  # type: ignore[union-attr]
+    assert any("evidence is required" in e for e in result["errors"])
 
 
 def test_evidence_optional_for_reported() -> None:
@@ -91,12 +91,12 @@ def test_outcome_counts_and_filtering() -> None:
 
     listed = _list_impl(outcome="needs_follow_up", surface=None, caller_agent_id="agent-1")
     assert listed["filtered_count"] == 1
-    assert listed["entries"][0]["surface"] == "/upload"  # type: ignore[index]
-    assert listed["entries"][0]["by_you"] is True  # type: ignore[index]
+    assert listed["entries"][0]["surface"] == "/upload"
+    assert listed["entries"][0]["by_you"] is True
 
     by_surface = _list_impl(outcome=None, surface="sea", caller_agent_id=None)
     assert by_surface["filtered_count"] == 1
-    assert by_surface["entries"][0]["surface"] == "/search"  # type: ignore[index]
+    assert by_surface["entries"][0]["surface"] == "/search"
 
 
 def test_list_rejects_unknown_outcome_filter() -> None:
@@ -112,7 +112,7 @@ def test_hydrate_reloads_from_disk(coverage_store: Path) -> None:
     assert entries[0]["risk_area"] == "object-level authorization"
 
 
-def _update(entry_id: str, **overrides: str) -> dict[str, object]:
+def _update(entry_id: str, **overrides: str) -> dict[str, Any]:
     kwargs = {
         "entry_id": entry_id,
         "outcome": "reported",
@@ -121,7 +121,7 @@ def _update(entry_id: str, **overrides: str) -> dict[str, object]:
         "agent_name": "followup-tester",
     }
     kwargs.update(overrides)
-    return _update_impl(**kwargs)  # type: ignore[arg-type]
+    return _update_impl(**kwargs)
 
 
 def test_update_moves_outcome_and_keeps_history() -> None:
@@ -162,7 +162,7 @@ def test_update_can_reopen_a_closed_entry() -> None:
 
     assert outcome_counts() == {"needs_follow_up": 1}
     listed = _list_impl(outcome=None, surface=None, caller_agent_id=None)
-    assert listed["entries"][0]["previous_outcomes"] == ["ruled_out"]  # type: ignore[index]
+    assert listed["entries"][0]["previous_outcomes"] == ["ruled_out"]
 
 
 def test_update_enforces_evidence_for_closing_outcomes() -> None:

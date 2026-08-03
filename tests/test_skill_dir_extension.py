@@ -1,3 +1,4 @@
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -13,10 +14,11 @@ from strix.skills import (
     skill_search_dirs,
     validate_requested_skills,
 )
+from strix.utils.resource_paths import get_strix_resource_path
 
 
 @pytest.fixture(autouse=True)
-def _clear_extra_dirs() -> None:
+def _clear_extra_dirs() -> Iterator[None]:
     original = list(skills_mod._EXTRA_SKILL_DIRS)
     skills_mod._EXTRA_SKILL_DIRS.clear()
     try:
@@ -38,7 +40,7 @@ def _write_root_skill(root: Path, name: str, body: str) -> None:
 
 def test_no_registration_leaves_builtin_only() -> None:
     assert registered_skill_dirs() == ()
-    builtin = skills_mod.get_strix_resource_path("skills")
+    builtin = get_strix_resource_path("skills")
     assert skill_search_dirs() == (builtin,)
     assert {"nmap", "subfinder"}.issubset(get_available_skills()["tooling"])
 
