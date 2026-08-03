@@ -63,6 +63,7 @@ def _do_finish(
             recommendations=recommendations.strip(),
         )
         vuln_count = len(report_state.vulnerability_reports)
+        coverage_summary = _coverage_summary()
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
         return {"success": False, "error": f"Failed to complete scan: {e!s}"}
@@ -71,12 +72,48 @@ def _do_finish(
             "finish_scan: completed scan with %d vulnerability report(s)",
             vuln_count,
         )
-        return {
+        result: dict[str, Any] = {
             "success": True,
             "scan_completed": True,
             "message": "Scan completed successfully",
             "vulnerabilities_found": vuln_count,
         }
+        result.update(coverage_summary)
+        return result
+
+
+def _coverage_summary() -> dict[str, Any]:
+    """Coverage counts plus a warning when surfaces were left unresolved."""
+    from strix.tools.coverage.tools import get_coverage_entries, outcome_counts
+
+    entries = get_coverage_entries()
+    if not entries:
+        return {
+            "coverage_recorded": 0,
+            "coverage_warning": (
+                "No coverage was recorded for this scan. The report cannot show which "
+                "surfaces were reviewed and cleared — only what was found. Use "
+                "record_coverage during testing so future scans can report negative space."
+            ),
+        }
+
+    counts = outcome_counts()
+    summary: dict[str, Any] = {
+        "coverage_recorded": len(entries),
+        "coverage_outcomes": counts,
+    }
+    unresolved = [e for e in entries if e.get("outcome") == "needs_follow_up"]
+    if unresolved:
+        summary["coverage_warning"] = (
+            f"{len(unresolved)} surface(s) closed as 'needs_follow_up' and remain "
+            "unresolved. These should be represented in the report as areas requiring "
+            "further review rather than omitted."
+        )
+        summary["unresolved_surfaces"] = [
+            {"surface": e.get("surface", ""), "risk_area": e.get("risk_area", "")}
+            for e in unresolved
+        ]
+    return summary
 
 
 @function_tool(timeout=60)
@@ -141,6 +178,14 @@ async def finish_scan(
        chain after a serious attempt is acceptable; skipping the
        chaining reasoning, or ignoring a plausibly-related combination,
        is not.
+    5. **Coverage reconciliation.** Call ``list_coverage`` and check
+       what was actually assessed against the surfaces you enumerated
+       during reconnaissance. Every surface you dispatched work on
+       should have a coverage entry; anything still open should be a
+       ``needs_follow_up`` row, not a silent omission. If a significant
+       surface has no entry at all, dispatch an agent to cover it or
+       record it as ``needs_follow_up`` before finishing. The response
+       from this tool reports coverage counts and any unresolved rows.
 
     **Calling this multiple times overwrites the previous report.**
     Make the single call comprehensive.
@@ -165,7 +210,15 @@ async def finish_scan(
         - ``methodology`` — frameworks followed (OWASP WSTG, PTES,
           OSSTMM, NIST), engagement type (black/gray/white box), scope
           and constraints, categories of testing performed. **No**
-          internal execution detail.
+          internal execution detail. End this section with a
+          **Reviewed Surfaces** markdown table built from
+          ``list_coverage`` — columns ``Surface`` | ``Risk Area`` |
+          ``Outcome`` | ``Notes`` — so the reader can see what was
+          examined and cleared, not only what was found. Render
+          outcomes in client-facing language (``Finding reported``,
+          ``No issue identified``, ``Not applicable``, ``Requires
+          further review``). If any surface requires further review,
+          call that out explicitly beneath the table.
         - ``technical_analysis`` — consolidated findings overview with
           severity model and systemic root causes. Reference individual
           vuln reports for repro steps; don't duplicate raw evidence.

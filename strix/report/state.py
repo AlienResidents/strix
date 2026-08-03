@@ -226,6 +226,10 @@ class ReportState:
         remediation_steps: str | None = None,
         evidence: str | None = None,
         assumptions: str | None = None,
+        counterevidence: str | None = None,
+        confidence: str | None = None,
+        confidence_rationale: str | None = None,
+        severity_change_conditions: str | None = None,
         fix_effort: str | None = None,
         cvss: float | None = None,
         cvss_breakdown: dict[str, str] | None = None,
@@ -234,6 +238,7 @@ class ReportState:
         cve: str | None = None,
         cwe: str | None = None,
         code_locations: list[dict[str, Any]] | None = None,
+        fix_verification: str | None = None,
         fix_pr_body: str | None = None,
         finding_class: str | None = None,
         dependency_metadata: dict[str, str] | None = None,
@@ -267,6 +272,14 @@ class ReportState:
             report["evidence"] = evidence.strip()
         if assumptions:
             report["assumptions"] = assumptions.strip()
+        if counterevidence:
+            report["counterevidence"] = counterevidence.strip()
+        if confidence:
+            report["confidence"] = confidence.strip().lower()
+        if confidence_rationale:
+            report["confidence_rationale"] = confidence_rationale.strip()
+        if severity_change_conditions:
+            report["severity_change_conditions"] = severity_change_conditions.strip()
         if fix_effort:
             report["fix_effort"] = fix_effort.strip().lower()
         if cvss is not None:
@@ -283,6 +296,8 @@ class ReportState:
             report["cwe"] = cwe.strip()
         if code_locations:
             report["code_locations"] = code_locations
+        if fix_verification:
+            report["fix_verification"] = fix_verification.strip()
         if fix_pr_body:
             report["fix_pr_body"] = fix_pr_body.strip()
         report["finding_class"] = (finding_class or "dynamic").strip().lower()
