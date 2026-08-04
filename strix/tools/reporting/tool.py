@@ -725,6 +725,8 @@ def _build_dependency_metadata(
     installed_version: str,
     package_ecosystem: str | None,
     fixed_version: str | None,
+    introduced_by: str | None,
+    dependency_path: str | None,
 ) -> dict[str, str]:
     metadata = {
         "package_name": package_name.strip(),
@@ -734,6 +736,10 @@ def _build_dependency_metadata(
         metadata["package_ecosystem"] = package_ecosystem.strip()
     if fixed_version and fixed_version.strip():
         metadata["fixed_version"] = fixed_version.strip()
+    if introduced_by and introduced_by.strip():
+        metadata["introduced_by"] = introduced_by.strip()
+    if dependency_path and dependency_path.strip():
+        metadata["dependency_path"] = dependency_path.strip()
     return metadata
 
 
@@ -770,6 +776,8 @@ async def _do_create_dependency(  # noqa: PLR0912
     advisory_cvss: float | None,
     technical_analysis: str | None,
     fix_effort: str,
+    introduced_by: str | None = None,
+    dependency_path: str | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
 ) -> dict[str, Any]:
@@ -824,6 +832,8 @@ async def _do_create_dependency(  # noqa: PLR0912
         installed_version=installed_version,
         package_ecosystem=package_ecosystem,
         fixed_version=fixed_version,
+        introduced_by=introduced_by,
+        dependency_path=dependency_path,
     )
     evidence = _build_dependency_evidence(
         cve=parsed_cve,
@@ -926,6 +936,8 @@ async def create_dependency_report(
     cwe: str | None = None,
     technical_analysis: str | None = None,
     fix_effort: str = "low",
+    introduced_by: str | None = None,
+    dependency_path: str | None = None,
 ) -> str:
     """File a known-CVE dependency (SCA) finding — one report per CVE x package.
 
@@ -978,6 +990,15 @@ async def create_dependency_report(
         technical_analysis: Optional deeper mechanism/root-cause detail.
         fix_effort: One of ``trivial`` / ``low`` / ``medium`` / ``high``
             (dependency upgrades are usually ``trivial``/``low``).
+        introduced_by: For a **transitive** dependency, the direct
+            dependency (from the project's own manifest) that pulls the
+            vulnerable package in, as ``name@version`` (e.g.
+            ``express@4.18.1``). Omit when the vulnerable package is
+            itself a direct dependency.
+        dependency_path: The resolution chain from the direct dependency
+            to the vulnerable package, joined with `` > `` (e.g.
+            ``express@4.18.1 > body-parser@1.20.0 > qs@6.10.2``). Omit
+            for direct dependencies.
     """
     agent_id, agent_name = _caller_identity(ctx)
 
@@ -997,6 +1018,8 @@ async def create_dependency_report(
         advisory_cvss=advisory_cvss,
         technical_analysis=technical_analysis,
         fix_effort=fix_effort,
+        introduced_by=introduced_by,
+        dependency_path=dependency_path,
         agent_id=agent_id,
         agent_name=agent_name,
     )
