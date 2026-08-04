@@ -749,6 +749,8 @@ def _build_dependency_evidence(
     package_name: str,
     installed_version: str,
     fixed_version: str | None,
+    introduced_by: str | None,
+    dependency_path: str | None,
 ) -> str:
     evidence = (
         f"**Advisory evidence:** `{cve}` applies to `{package_name}` "
@@ -756,6 +758,13 @@ def _build_dependency_evidence(
     )
     if fixed_version and fixed_version.strip():
         evidence += f" The advisory is fixed in `{fixed_version.strip()}`."
+    if introduced_by and introduced_by.strip():
+        evidence += (
+            f"\n\n**Transitive dependency:** introduced by the direct "
+            f"dependency `{introduced_by.strip()}`."
+        )
+    if dependency_path and dependency_path.strip():
+        evidence += f"\n\n**Dependency chain:** `{dependency_path.strip()}`"
     return evidence
 
 
@@ -840,6 +849,8 @@ async def _do_create_dependency(  # noqa: PLR0912
         package_name=package_name.strip(),
         installed_version=installed_version.strip(),
         fixed_version=fixed_version,
+        introduced_by=introduced_by,
+        dependency_path=dependency_path,
     )
 
     try:
