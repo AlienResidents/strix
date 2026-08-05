@@ -433,14 +433,15 @@ class StrixProvider(MultiProvider):
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
-            return _CodexResponsesModel(
+            model: Model = _CodexResponsesModel(
                 slug,
                 codex.get_subscription_client(),
                 reasoning_effort=llm.reasoning_effort,
             )
-        model = super().get_model(model_name)
-        if llm.disable_streaming:
-            model = _NonStreamingModel(model)
+        else:
+            model = super().get_model(model_name)
+            if llm.disable_streaming:
+                model = _NonStreamingModel(model)
         return _TurnGuardModel(model, max_tool_calls_per_turn=llm.max_tool_calls_per_turn)
 
 
