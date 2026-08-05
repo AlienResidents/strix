@@ -31,7 +31,7 @@ from openai.types.responses import (
 
 from strix.config import codex, loader
 from strix.config.loader import load_settings
-from strix.config.models import StrixProvider, _NonStreamingModel, _UniqueToolCallIdModel
+from strix.config.models import StrixProvider, _NonStreamingModel, _TurnGuardModel
 
 
 if TYPE_CHECKING:
@@ -299,7 +299,7 @@ def test_get_model_wraps_when_disabled(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _UniqueToolCallIdModel)
+    assert isinstance(model, _TurnGuardModel)
     assert isinstance(model._inner, _NonStreamingModel)
 
 
@@ -311,7 +311,7 @@ def test_get_model_keeps_streaming_by_default(
     load_settings()
 
     model = StrixProvider().get_model("openai/gpt-4o-mini")
-    assert isinstance(model, _UniqueToolCallIdModel)
+    assert isinstance(model, _TurnGuardModel)
     assert model._inner is inner
 
 
