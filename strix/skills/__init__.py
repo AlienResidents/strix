@@ -145,10 +145,25 @@ def _bare_skill_files(skill_name: str) -> list[Path]:
     return candidates
 
 
-def get_available_skills() -> dict[str, list[str]]:
-    grouped: dict[str, list[str]] = {}
+def _skill_description(file_path: Path) -> str:
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except (OSError, ValueError):
+        return ""
+    frontmatter = _FRONTMATTER_PATTERN.match(content)
+    if frontmatter is None:
+        return ""
+    match = re.search(r"^description:\s*(.+?)\s*$", frontmatter.group(0), re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def get_available_skills() -> dict[str, list[dict[str, str]]]:
+    grouped: dict[str, list[dict[str, str]]] = {}
     for category, name in _iter_user_skill_files():
-        grouped.setdefault(category, []).append(name)
+        path = _qualified_skill_files(f"{category}/{name}")
+        grouped.setdefault(category, []).append(
+            {"name": name, "description": _skill_description(path[0]) if path else ""}
+        )
     return grouped
 
 
