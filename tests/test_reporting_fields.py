@@ -295,6 +295,41 @@ async def test_dependency_report_records_reachability(report_state: ReportState)
     assert report["severity"] == "high"
 
 
+async def test_dependency_report_keeps_evidence_for_unknown_reachability(
+    report_state: ReportState,
+) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Impact.",
+        remediation_steps="Upgrade.",
+        assumptions="Assumptions.",
+        package_ecosystem="npm",
+        manifest_path="package-lock.json",
+        fixed_version="1.0.1",
+        cwe=None,
+        advisory_cvss=5.0,
+        technical_analysis=None,
+        fix_effort="low",
+        reachability="unknown",
+        reachability_evidence="Symbol search skipped: minified vendor bundle.",
+    )
+
+    assert result["success"] is True
+    report = report_state.vulnerability_reports[0]
+    # The level stays absent for unknown, but the stated reason survives.
+    assert "reachability" not in report["dependency_metadata"]
+    assert (
+        report["dependency_metadata"]["reachability_evidence"]
+        == "Symbol search skipped: minified vendor bundle."
+    )
+    assert "**Usage analysis:** inconclusive." in report["evidence"]
+
+
 async def test_dependency_report_rejects_reachability_without_evidence(
     report_state: ReportState,
 ) -> None:

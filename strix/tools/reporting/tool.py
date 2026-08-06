@@ -775,12 +775,14 @@ def _build_dependency_metadata(
         metadata["introduced_by"] = introduced_by.strip()
     if dependency_path and dependency_path.strip():
         metadata["dependency_path"] = dependency_path.strip()
-    # "unknown" is the absent case — omitting it keeps the jsonb contract clean,
-    # and evidence without a level would have nothing to qualify.
+    # "unknown" is the absent case — omitting the level keeps the jsonb
+    # contract clean. The evidence is kept even then: why the analysis was
+    # inconclusive is exactly what a triager needs, since unknown ranks as
+    # riskier than not_imported.
     if reachability and reachability.strip() and reachability.strip() != "unknown":
         metadata["reachability"] = reachability.strip()
-        if reachability_evidence and reachability_evidence.strip():
-            metadata["reachability_evidence"] = reachability_evidence.strip()
+    if reachability_evidence and reachability_evidence.strip():
+        metadata["reachability_evidence"] = reachability_evidence.strip()
     return metadata
 
 
@@ -824,6 +826,12 @@ def _build_dependency_evidence(
         if reachability_evidence and reachability_evidence.strip():
             evidence += f" {reachability_evidence.strip()}"
         evidence += (
+            " This is a prioritization signal from static analysis, not a"
+            " proof of exploitability or of safety."
+        )
+    elif reachability_evidence and reachability_evidence.strip():
+        evidence += (
+            f"\n\n**Usage analysis:** inconclusive. {reachability_evidence.strip()}"
             " This is a prioritization signal from static analysis, not a"
             " proof of exploitability or of safety."
         )

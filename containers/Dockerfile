@@ -177,7 +177,9 @@ RUN set -eux; \
     install -m 0755 /tmp/gitleaks /usr/local/bin/gitleaks; \
     rm -f /tmp/gitleaks /tmp/gitleaks.tgz
 
-RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+# Pinned: the SCA chain depends on trivy's Relationship/DependsOn JSON fields,
+# so a floating binary can silently degrade dependency findings.
+RUN curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/v0.73.0/contrib/install.sh | sh -s -- -b /usr/local/bin v0.73.0
 
 RUN apt-get install -y wapiti
 
