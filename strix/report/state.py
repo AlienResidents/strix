@@ -236,7 +236,7 @@ class ReportState:
         code_locations: list[dict[str, Any]] | None = None,
         fix_pr_body: str | None = None,
         finding_class: str | None = None,
-        dependency_metadata: dict[str, str] | None = None,
+        dependency_metadata: dict[str, Any] | None = None,
         agent_id: str | None = None,
         agent_name: str | None = None,
     ) -> str:

@@ -68,7 +68,13 @@ lockfiles exist.
 For each entry under `.Results[].Vulnerabilities[]` in `trivy-sca.json`, collect:
 
 - `VulnerabilityID` — the CVE (or GHSA; prefer the CVE if both are present)
+- `VendorIDs` — every alternate advisory ID (GHSA etc.); pass them all as
+  `advisory_aliases` (minus the primary CVE) — they are how findings are
+  matched across scanners
 - `PkgName` and `InstalledVersion` — the affected package + pinned version
+- `PkgIdentifier.PURL` — the canonical package URL (e.g.
+  `pkg:npm/lodash@4.17.20`); pass it verbatim as `package_purl` — never
+  rebuild it by hand
 - `FixedVersion` — the version that resolves it
 - `Target` — the lockfile path it came from
 - `.Results[].Type` (e.g. `npm`, `pip`, `gomod`, `pom`, `gemspec`, `cargo`) — the
@@ -98,7 +104,11 @@ contains it, then pass to `create_dependency_report`:
 - `dependency_path` — the shortest resolution chain from that direct
   dependency to the vulnerable package, joined with ` > ` (e.g.
   `express@4.18.1 > body-parser@1.20.0 > qs@6.10.2`).
-- Omit both when the vulnerable package is itself a direct dependency.
+- `dependency_edges` — the same chain as structured edges straight from
+  `DependsOn`, each `{"source": "name@version", "target": "name@version"}`
+  (e.g. `[{"source": "express@4.18.1", "target": "body-parser@1.20.0"},
+  {"source": "body-parser@1.20.0", "target": "qs@6.10.2"}]`).
+- Omit all of these when the vulnerable package is itself a direct dependency.
 
 If the ecosystem's lockfile gives trivy no graph (`DependsOn` absent), derive
 the chain from the package manager instead (`npm ls <pkg>`, `pnpm why <pkg>`,
@@ -165,7 +175,7 @@ fi
    part shared across a package's CVEs.
 3. If the analysis was not performed or is inconclusive (obfuscated code,
    dynamic loading, unparsable sources) ⇒ `unknown` and say why in
-   `assumptions`.
+   `reachability_evidence`.
 
 Cheap-first budgeting: the import check is one search per package — always do
 it. Do the per-CVE symbol match for every CVE whose advisory names affected
@@ -221,6 +231,12 @@ findings and rejects empty PoC fields):
     `services/api/pom.xml`); the tool rejects absolute paths and `..` segments.
     This binds the finding to the exact file so remediation can target the
     right repository.
+  - `package_purl` — `PkgIdentifier.PURL` verbatim (the canonical package
+    identity used to match findings across scanners).
+  - `advisory_aliases` — every ID in `VendorIDs` (plus the GHSA when
+    `VulnerabilityID` was a GHSA mapped to a CVE), minus the primary `cve`.
+  - `dependency_edges` — the structured resolution chain for transitive
+    findings (see above).
 - Reference the repo-relative `Target` lockfile path in `description` /
   `technical_analysis` (no leading slash) so the finding is traceable.
 - Put the concrete proof in `description` / `technical_analysis`: package name,

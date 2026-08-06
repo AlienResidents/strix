@@ -749,6 +749,76 @@ def _validate_manifest_path(manifest_path: str | None) -> str | None:
     return None
 
 
+_MAX_ADVISORY_ALIASES = 32
+_MAX_DEPENDENCY_EDGES = 100
+
+
+def _validate_package_purl(package_purl: str | None) -> str | None:
+    """Return an error message when a provided purl is malformed."""
+    if package_purl is None:
+        return None
+    purl = package_purl.strip()
+    if not purl:
+        return None
+    if not purl.startswith("pkg:") or "/" not in purl:
+        return (
+            f"package_purl must be a canonical package URL like "
+            f"'pkg:npm/lodash@4.17.20' (trivy's PkgIdentifier.PURL), got {purl!r}"
+        )
+    return None
+
+
+def _normalize_advisory_aliases(advisory_aliases: list[str] | None) -> list[str]:
+    """Strip, drop empties, and dedupe aliases preserving order."""
+    if not advisory_aliases:
+        return []
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for alias in advisory_aliases:
+        cleaned = str(alias or "").strip()
+        if cleaned and cleaned.upper() not in seen:
+            seen.add(cleaned.upper())
+            normalized.append(cleaned)
+    return normalized[:_MAX_ADVISORY_ALIASES]
+
+
+def _validate_dependency_edges(
+    dependency_edges: list[Any] | None,
+) -> str | None:
+    """Return an error message when provided edges are malformed."""
+    if not dependency_edges:
+        return None
+    if len(dependency_edges) > _MAX_DEPENDENCY_EDGES:
+        return f"dependency_edges must have at most {_MAX_DEPENDENCY_EDGES} entries"
+    for edge in dependency_edges:
+        if not isinstance(edge, dict):
+            return (
+                f"each dependency edge must be an object with 'source' and 'target', got {edge!r}"
+            )
+        source = str(edge.get("source") or "").strip()
+        target = str(edge.get("target") or "").strip()
+        if not source or not target:
+            return (
+                "each dependency edge needs non-empty 'source' and 'target' "
+                f"('name@version' strings), got {edge!r}"
+            )
+    return None
+
+
+def _normalize_dependency_edges(
+    dependency_edges: list[dict[str, str]] | None,
+) -> list[dict[str, str]]:
+    if not dependency_edges:
+        return []
+    return [
+        {
+            "source": str(edge.get("source") or "").strip(),
+            "target": str(edge.get("target") or "").strip(),
+        }
+        for edge in dependency_edges
+    ]
+
+
 def _build_dependency_metadata(
     *,
     package_name: str,
@@ -760,8 +830,11 @@ def _build_dependency_metadata(
     manifest_path: str | None = None,
     reachability: str | None = None,
     reachability_evidence: str | None = None,
-) -> dict[str, str]:
-    metadata = {
+    package_purl: str | None = None,
+    advisory_aliases: list[str] | None = None,
+    dependency_edges: list[dict[str, str]] | None = None,
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
         "package_name": package_name.strip(),
         "installed_version": installed_version.strip(),
     }
@@ -775,6 +848,14 @@ def _build_dependency_metadata(
         metadata["introduced_by"] = introduced_by.strip()
     if dependency_path and dependency_path.strip():
         metadata["dependency_path"] = dependency_path.strip()
+    if package_purl and package_purl.strip():
+        metadata["package_purl"] = package_purl.strip()
+    aliases = _normalize_advisory_aliases(advisory_aliases)
+    if aliases:
+        metadata["advisory_aliases"] = aliases
+    edges = _normalize_dependency_edges(dependency_edges)
+    if edges:
+        metadata["dependency_edges"] = edges
     # "unknown" is the absent case — omitting the level keeps the jsonb
     # contract clean. The evidence is kept even then: why the analysis was
     # inconclusive is exactly what a triager needs, since unknown ranks as
@@ -860,6 +941,9 @@ async def _do_create_dependency(  # noqa: PLR0912
     manifest_path: str | None = None,
     reachability: str = "unknown",
     reachability_evidence: str | None = None,
+    package_purl: str | None = None,
+    advisory_aliases: list[str] | None = None,
+    dependency_edges: list[dict[str, str]] | None = None,
     agent_id: str | None = None,
     agent_name: str | None = None,
 ) -> dict[str, Any]:
@@ -921,6 +1005,17 @@ async def _do_create_dependency(  # noqa: PLR0912
     elif not 0.0 <= advisory_cvss <= 10.0:
         errors.append(f"advisory_cvss must be between 0.0 and 10.0, got {advisory_cvss}")
 
+    # The identity fields are additive: a report may always omit them, but a
+    # provided value must be well-formed.
+    errors.extend(
+        err
+        for err in (
+            _validate_package_purl(package_purl),
+            _validate_dependency_edges(dependency_edges),
+        )
+        if err
+    )
+
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
@@ -935,6 +1030,9 @@ async def _do_create_dependency(  # noqa: PLR0912
         manifest_path=manifest_path,
         reachability=reachability,
         reachability_evidence=reachability_evidence,
+        package_purl=package_purl,
+        advisory_aliases=advisory_aliases,
+        dependency_edges=dependency_edges,
     )
     evidence = _build_dependency_evidence(
         cve=parsed_cve,
@@ -1046,6 +1144,9 @@ async def create_dependency_report(
     dependency_path: str | None = None,
     reachability: str = "unknown",
     reachability_evidence: str | None = None,
+    package_purl: str | None = None,
+    advisory_aliases: list[str] | None = None,
+    dependency_edges: list[dict[str, str]] | None = None,
 ) -> str:
     """File a known-CVE dependency (SCA) finding — one report per CVE x package.
 
@@ -1138,7 +1239,22 @@ async def create_dependency_report(
         reachability_evidence: The concrete proof for the claimed level
             (required for any level other than ``unknown``): repo-relative
             ``file:line`` of the import or symbol usage, the matched
-            advisory symbols, or the govulncheck call-path excerpt.
+            advisory symbols, or the govulncheck call-path excerpt. For
+            ``unknown``, optionally state why the analysis was
+            inconclusive.
+        package_purl: The canonical package URL exactly as trivy reports
+            it in ``PkgIdentifier.PURL`` (e.g. ``pkg:npm/lodash@4.17.20``,
+            ``pkg:maven/org.apache.logging.log4j/log4j-core@2.14.1``).
+            Pass it verbatim — do not rebuild it by hand.
+        advisory_aliases: Every alternate ID the advisory is known by —
+            trivy's ``VendorIDs`` plus the GHSA ID when present (e.g.
+            ``["GHSA-35jh-r3h4-6jhm"]``). Do not repeat the primary CVE.
+        dependency_edges: Structured resolution edges from
+            ``DependsOn``, each ``{"source": "name@version",
+            "target": "name@version"}`` where ``source`` resolves
+            ``target``, covering the chain from the direct dependency to
+            the vulnerable package. Complements the human-readable
+            ``dependency_path`` string; omit when there is no graph.
     """
     agent_id, agent_name = _caller_identity(ctx)
 
@@ -1163,6 +1279,9 @@ async def create_dependency_report(
         manifest_path=manifest_path,
         reachability=reachability,
         reachability_evidence=reachability_evidence,
+        package_purl=package_purl,
+        advisory_aliases=advisory_aliases,
+        dependency_edges=dependency_edges,
         agent_id=agent_id,
         agent_name=agent_name,
     )

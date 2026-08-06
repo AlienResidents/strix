@@ -330,6 +330,104 @@ async def test_dependency_report_keeps_evidence_for_unknown_reachability(
     assert "**Usage analysis:** inconclusive." in report["evidence"]
 
 
+async def test_dependency_report_records_identity_fields(report_state: ReportState) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2022-24999 in qs 6.10.2",
+        description="Prototype pollution in qs parsing.",
+        target="repo/package.json",
+        cve="CVE-2022-24999",
+        package_name="qs",
+        installed_version="6.10.2",
+        impact="Denial of service via crafted query strings.",
+        remediation_steps="Upgrade express to 4.18.2.",
+        assumptions="qs parses all incoming query strings by default.",
+        package_ecosystem="npm",
+        manifest_path="package-lock.json",
+        fixed_version="6.10.3",
+        cwe=None,
+        advisory_cvss=7.5,
+        technical_analysis=None,
+        fix_effort="trivial",
+        introduced_by="express@4.18.1",
+        dependency_path="express@4.18.1 > body-parser@1.20.0 > qs@6.10.2",
+        package_purl="pkg:npm/qs@6.10.2",
+        advisory_aliases=["GHSA-hrpp-h998-j3pp", "  ghsa-hrpp-h998-j3pp ", ""],
+        dependency_edges=[
+            {"source": "express@4.18.1", "target": "body-parser@1.20.0"},
+            {"source": "body-parser@1.20.0", "target": "qs@6.10.2"},
+        ],
+    )
+    assert result["success"] is True
+    metadata = report_state.vulnerability_reports[0]["dependency_metadata"]
+    assert metadata["package_purl"] == "pkg:npm/qs@6.10.2"
+    # Aliases are case-insensitively deduped, stripped, and empties dropped.
+    assert metadata["advisory_aliases"] == ["GHSA-hrpp-h998-j3pp"]
+    assert metadata["dependency_edges"] == [
+        {"source": "express@4.18.1", "target": "body-parser@1.20.0"},
+        {"source": "body-parser@1.20.0", "target": "qs@6.10.2"},
+    ]
+
+
+async def test_dependency_report_omits_absent_identity_fields(
+    report_state: ReportState,
+) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Impact.",
+        remediation_steps="Upgrade.",
+        assumptions="Assumptions.",
+        package_ecosystem="npm",
+        manifest_path="package-lock.json",
+        fixed_version=None,
+        cwe=None,
+        advisory_cvss=5.0,
+        technical_analysis=None,
+        fix_effort="low",
+        package_purl="  ",
+        advisory_aliases=[],
+        dependency_edges=None,
+    )
+    assert result["success"] is True
+    metadata = report_state.vulnerability_reports[0]["dependency_metadata"]
+    assert "package_purl" not in metadata
+    assert "advisory_aliases" not in metadata
+    assert "dependency_edges" not in metadata
+
+
+async def test_dependency_report_rejects_malformed_identity_fields(
+    report_state: ReportState,
+) -> None:
+    result = await _do_create_dependency(
+        title="CVE-2024-0001 in sample 1.0.0",
+        description="Published advisory affects the pinned version.",
+        target="repo/package.json",
+        cve="CVE-2024-0001",
+        package_name="sample",
+        installed_version="1.0.0",
+        impact="Impact.",
+        remediation_steps="Upgrade.",
+        assumptions="Assumptions.",
+        package_ecosystem="npm",
+        manifest_path="package-lock.json",
+        fixed_version=None,
+        cwe=None,
+        advisory_cvss=5.0,
+        technical_analysis=None,
+        fix_effort="low",
+        package_purl="npm/sample@1.0.0",
+        dependency_edges=[{"source": "a@1.0.0"}],
+    )
+    assert result["success"] is False
+    assert any("package_purl" in error for error in result["errors"])
+    assert any("dependency edge" in error for error in result["errors"])
+    assert report_state.vulnerability_reports == []
+
+
 async def test_dependency_report_rejects_reachability_without_evidence(
     report_state: ReportState,
 ) -> None:
