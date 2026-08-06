@@ -164,7 +164,6 @@ Storage rules use OR-across-matches semantics: a later permissive match can reop
 
 **Tests**
 - GET GCS object paths via HTTPS without auth; verify Content-Type and `Content-Disposition: attachment`
-- Test the Firebase Storage list/read/write matrix above with each available principal
 - Generate and reuse signed URLs across accounts and paths; try case/URL-encoding variants
 - Upload HTML/SVG and verify `X-Content-Type-Options: nosniff`; check for script execution
 

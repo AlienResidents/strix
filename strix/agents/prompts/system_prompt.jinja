@@ -492,7 +492,7 @@ On-demand specialist skills. Spawn a specialist via `create_agent(skills=[...])`
 
 {% for category, skills in available_skills | dictsort -%}
 {% for skill in skills -%}
-- {{ category }}/{{ skill.name }}: {{ skill.description }}
+- {{ category }}/{{ skill.name }}{% if skill.description %}: {{ skill.description }}{% endif %}
 {% endfor -%}
 {% endfor -%}
 </available_skills>

@@ -84,10 +84,62 @@ def test_available_skill_includes_frontmatter_description(tmp_path: Path) -> Non
     ]
 
 
+def test_available_skill_supports_colon_in_description(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "widget",
+        "---\nname: widget\ndescription: Useful widget: handles YAML\n---\nwidget body",
+    )
+    register_skill_dir(tmp_path)
+
+    assert get_available_skills()["extra"] == [
+        {"name": "widget", "description": "Useful widget: handles YAML"}
+    ]
+
+
+def test_available_skill_normalizes_quoted_multiline_description(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "widget",
+        '---\nname: widget\ndescription: "Useful: widget guidance"\n---\nwidget body',
+    )
+    register_skill_dir(tmp_path)
+
+    assert get_available_skills()["extra"] == [
+        {"name": "widget", "description": "Useful: widget guidance"}
+    ]
+
+
+def test_available_skill_normalizes_block_description(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "widget",
+        "---\nname: widget\ndescription: |\n  First line\n  Second line\n---\nwidget body",
+    )
+    register_skill_dir(tmp_path)
+
+    assert get_available_skills()["extra"] == [
+        {"name": "widget", "description": "First line Second line"}
+    ]
+
+
 def test_system_prompt_renders_skill_descriptions() -> None:
     prompt = render_system_prompt(scan_mode="quick", is_root=True)
 
     assert "- technologies/firebase: Firebase security testing covering" in prompt
+
+
+def test_system_prompt_omits_empty_skill_description(tmp_path: Path) -> None:
+    _write_skill(tmp_path, "extra", "widget", "---\nname: widget\ndescription:\n---\nwidget body")
+    register_skill_dir(tmp_path)
+
+    prompt = render_system_prompt(scan_mode="quick", is_root=True)
+
+    assert "- extra/widget\n" in prompt
+    assert "- extra/widget: " not in prompt
 
 
 def test_registered_root_skill_is_discoverable_and_valid(tmp_path: Path) -> None:

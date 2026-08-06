@@ -4,6 +4,9 @@ import threading
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
+from typing import cast
+
+import yaml
 
 from strix.telemetry import posthog, scarf
 from strix.utils.resource_paths import get_strix_resource_path
@@ -17,6 +20,7 @@ _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordinat
 _ROOT_SKILL_CATEGORY = "root"
 
 _EXTRA_SKILL_DIRS: list[Path] = []
+_SKILL_METADATA_CACHE: dict[tuple[Path, int, int], dict[str, str]] = {}
 
 
 def register_skill_dir(path: str | Path) -> None:
@@ -109,13 +113,18 @@ def _get_ambiguous_skill_names() -> set[str]:
     return {name for name, count in counts.items() if count > 1}
 
 
-def _qualified_skill_files(skill_name: str) -> list[Path]:
+def _qualified_skill_file_for_name(skill_name: str) -> Path | None:
     category, _, name = skill_name.partition("/")
     for skills_dir in skill_search_dirs():
         candidate = _qualified_skill_file(skills_dir, category, name)
         if candidate is not None:
-            return [candidate]
-    return []
+            return candidate
+    return None
+
+
+def _qualified_skill_files(skill_name: str) -> list[Path]:
+    candidate = _qualified_skill_file_for_name(skill_name)
+    return [candidate] if candidate is not None else []
 
 
 def _bare_skill_files(skill_name: str) -> list[Path]:
@@ -145,25 +154,75 @@ def _bare_skill_files(skill_name: str) -> list[Path]:
     return candidates
 
 
-def _skill_description(file_path: Path) -> str:
+def _parse_skill_content(content: str) -> tuple[dict[str, str], str]:
+    """Parse skill frontmatter once and return metadata plus markdown body."""
+    frontmatter = _FRONTMATTER_PATTERN.match(content)
+    if frontmatter is None:
+        return {}, content.lstrip()
+
+    try:
+        metadata_text = frontmatter.group(0)[4:].rsplit("\n---", 1)[0]
+        try:
+            metadata_value: object = yaml.safe_load(metadata_text) or {}
+        except yaml.YAMLError:
+            # Preserve the historical support for an unquoted colon in a
+            # description while accepting full YAML for other frontmatter.
+            normalized_lines: list[str] = []
+            for line in metadata_text.splitlines():
+                if line.startswith("description: ") and not line.startswith(
+                    ('description: "', "description: '")
+                ):
+                    value = line.removeprefix("description: ")
+                    value = value.replace("\\", "\\\\").replace('"', '\\"')
+                    normalized_lines.append(f'description: "{value}"')
+                else:
+                    normalized_lines.append(line)
+            metadata_value = yaml.safe_load("\n".join(normalized_lines)) or {}
+    except yaml.YAMLError:
+        logger.warning("Invalid skill frontmatter")
+        metadata_value = {}
+    metadata = (
+        cast("dict[object, object]", metadata_value) if isinstance(metadata_value, dict) else {}
+    )
+
+    normalized = {str(key): "" if value is None else str(value) for key, value in metadata.items()}
+    return normalized, content[frontmatter.end() :].lstrip()
+
+
+def _read_skill_metadata(file_path: Path) -> dict[str, str]:
+    try:
+        stat = file_path.stat()
+    except OSError:
+        logger.warning("Skill file disappeared while reading metadata: %s", file_path)
+        return {}
+    cache_key = (file_path, stat.st_mtime_ns, stat.st_size)
+    cached = _SKILL_METADATA_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
     try:
         content = file_path.read_text(encoding="utf-8")
     except (OSError, ValueError):
-        return ""
-    frontmatter = _FRONTMATTER_PATTERN.match(content)
-    if frontmatter is None:
-        return ""
-    match = re.search(r"^description:\s*(.+?)\s*$", frontmatter.group(0), re.MULTILINE)
-    return match.group(1).strip() if match else ""
+        logger.warning("Failed to read skill metadata: %s", file_path)
+        return {}
+    metadata, _ = _parse_skill_content(content)
+    _SKILL_METADATA_CACHE[cache_key] = metadata
+    return metadata
 
 
 def get_available_skills() -> dict[str, list[dict[str, str]]]:
     grouped: dict[str, list[dict[str, str]]] = {}
     for category, name in _iter_user_skill_files():
-        path = _qualified_skill_files(f"{category}/{name}")
-        grouped.setdefault(category, []).append(
-            {"name": name, "description": _skill_description(path[0]) if path else ""}
-        )
+        file_path = _qualified_skill_file_for_name(f"{category}/{name}")
+        if file_path is None:
+            logger.warning(
+                "Skill disappeared while gathering available skills: %s/%s",
+                category,
+                name,
+            )
+            continue
+        metadata = _read_skill_metadata(file_path)
+        description = " ".join(metadata.get("description", "").split())
+        grouped.setdefault(category, []).append({"name": name, "description": description})
     return grouped
 
 
@@ -243,7 +302,8 @@ def load_skills(skill_names: list[str]) -> dict[str, str]:
             continue
 
         var_name = skill_name.split("/")[-1]
-        skill_content[var_name] = _FRONTMATTER_PATTERN.sub("", content).lstrip()
+        _, skill_body = _parse_skill_content(content)
+        skill_content[var_name] = skill_body
         logger.debug("Loaded skill: %s -> %s", skill_name, var_name)
         _track_skill_loaded(var_name, file_path)
 
