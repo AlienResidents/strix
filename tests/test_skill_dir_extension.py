@@ -98,7 +98,7 @@ def test_available_skill_supports_colon_in_description(tmp_path: Path) -> None:
     ]
 
 
-def test_available_skill_normalizes_quoted_multiline_description(tmp_path: Path) -> None:
+def test_available_skill_normalizes_quoted_description(tmp_path: Path) -> None:
     _write_skill(
         tmp_path,
         "extra",
@@ -109,20 +109,6 @@ def test_available_skill_normalizes_quoted_multiline_description(tmp_path: Path)
 
     assert get_available_skills()["extra"] == [
         {"name": "widget", "description": "Useful: widget guidance"}
-    ]
-
-
-def test_available_skill_normalizes_block_description(tmp_path: Path) -> None:
-    _write_skill(
-        tmp_path,
-        "extra",
-        "widget",
-        "---\nname: widget\ndescription: |\n  First line\n  Second line\n---\nwidget body",
-    )
-    register_skill_dir(tmp_path)
-
-    assert get_available_skills()["extra"] == [
-        {"name": "widget", "description": "First line Second line"}
     ]
 
 

@@ -4,9 +4,6 @@ import threading
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
-from typing import cast
-
-import yaml
 
 from strix.telemetry import posthog, scarf
 from strix.utils.resource_paths import get_strix_resource_path
@@ -15,6 +12,7 @@ from strix.utils.resource_paths import get_strix_resource_path
 logger = logging.getLogger(__name__)
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
+_FRONTMATTER_LINE_PATTERN = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:[ \t]*(?P<value>.*))?$")
 
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 _ROOT_SKILL_CATEGORY = "root"
@@ -160,33 +158,16 @@ def _parse_skill_content(content: str) -> tuple[dict[str, str], str]:
     if frontmatter is None:
         return {}, content.lstrip()
 
-    try:
-        metadata_text = frontmatter.group(0)[4:].rsplit("\n---", 1)[0]
-        try:
-            metadata_value: object = yaml.safe_load(metadata_text) or {}
-        except yaml.YAMLError:
-            # Preserve the historical support for an unquoted colon in a
-            # description while accepting full YAML for other frontmatter.
-            normalized_lines: list[str] = []
-            for line in metadata_text.splitlines():
-                if line.startswith("description: ") and not line.startswith(
-                    ('description: "', "description: '")
-                ):
-                    value = line.removeprefix("description: ")
-                    value = value.replace("\\", "\\\\").replace('"', '\\"')
-                    normalized_lines.append(f'description: "{value}"')
-                else:
-                    normalized_lines.append(line)
-            metadata_value = yaml.safe_load("\n".join(normalized_lines)) or {}
-    except yaml.YAMLError:
-        logger.warning("Invalid skill frontmatter")
-        metadata_value = {}
-    metadata = (
-        cast("dict[object, object]", metadata_value) if isinstance(metadata_value, dict) else {}
-    )
-
-    normalized = {str(key): "" if value is None else str(value) for key, value in metadata.items()}
-    return normalized, content[frontmatter.end() :].lstrip()
+    metadata: dict[str, str] = {}
+    for line in frontmatter.group(0).splitlines()[1:]:
+        match = _FRONTMATTER_LINE_PATTERN.match(line)
+        if match is None:
+            continue
+        value = match.group("value") or ""
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        metadata[match.group("key")] = value
+    return metadata, content[frontmatter.end() :].lstrip()
 
 
 def _read_skill_metadata(file_path: Path) -> dict[str, str]:
