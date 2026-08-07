@@ -6,11 +6,13 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from strix.report.coverage import (
+    _SKILL_PHRASINGS,
     build_coverage_document,
     read_agent_graph,
     render_coverage_markdown,
     write_coverage,
 )
+from strix.skills import get_available_skills
 
 
 if TYPE_CHECKING:
@@ -201,3 +203,80 @@ def test_read_agent_graph_loads_a_snapshot(tmp_path: Path) -> None:
     (tmp_path / "agents.json").write_text(json.dumps(_graph()), encoding="utf-8")
 
     assert read_agent_graph(tmp_path)["names"] == {"agent-1": "authz-tester"}
+
+
+def test_multi_token_skill_matches_how_a_pentester_writes_it() -> None:
+    """An agent carrying path_traversal_lfi_rfi records "Path Traversal".
+
+    Requiring the skill's filename verbatim published a false gap for a class
+    that had been tested and even had a finding filed against it.
+    """
+    doc = _document(
+        entries=[_entry(risk_area="Path Traversal / Directory Traversal", surface="/download")],
+        agent_graph=_graph(metadata={"agent-1": {"skills": ["path_traversal_lfi_rfi"]}}),
+    )
+
+    assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
+
+
+def test_every_vulnerability_skill_declares_its_phrasings() -> None:
+    """A new skill without phrasings would be matched by its filename alone,
+    which is how the false gap above got published."""
+    missing = set(get_available_skills()["vulnerabilities"]) - set(_SKILL_PHRASINGS)
+
+    assert not missing, f"add ledger phrasings for: {sorted(missing)}"
+
+
+def test_declared_phrasings_name_real_skills() -> None:
+    stale = set(_SKILL_PHRASINGS) - set(get_available_skills()["vulnerabilities"])
+
+    assert not stale, f"phrasings for skills that no longer exist: {sorted(stale)}"
+
+
+def _delegating_graph(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "statuses": {"root": "completed", "agent-1": "completed"},
+        "names": {"root": "Root Agent", "agent-1": "authz-tester"},
+        "parent_of": {"agent-1": "root"},
+        "metadata": {"agent-1": {"skills": ["idor"]}},
+    }
+    base.update(overrides)
+    return base
+
+
+def test_delegating_root_agent_is_not_a_coverage_gap() -> None:
+    """The root delegates and reconciles; it is not a tester that went quiet.
+    Flagging it would put the same false line in every clean report."""
+    doc = _document(agent_graph=_delegating_graph())
+
+    silent = [gap for gap in doc["gaps"] if gap["kind"] == "agent_recorded_no_coverage"]
+    assert silent == []
+
+
+def test_a_subagent_that_records_nothing_is_still_a_gap() -> None:
+    doc = _document(
+        agent_graph=_delegating_graph(
+            statuses={"root": "completed", "agent-1": "completed", "agent-2": "completed"},
+            names={"root": "Root Agent", "agent-1": "authz-tester", "agent-2": "recon"},
+            parent_of={"agent-1": "root", "agent-2": "root"},
+        )
+    )
+
+    silent = [gap for gap in doc["gaps"] if gap["kind"] == "agent_recorded_no_coverage"]
+    assert [gap["agent_name"] for gap in silent] == ["recon"]
+
+
+def test_a_root_that_worked_alone_is_held_to_the_rule() -> None:
+    """With no subagents there is nobody else the testing could have come
+    from, so silence is a real gap."""
+    doc = _document(
+        entries=[],
+        agent_graph={
+            "statuses": {"root": "completed"},
+            "names": {"root": "Root Agent"},
+            "parent_of": {},
+        },
+    )
+
+    silent = [gap for gap in doc["gaps"] if gap["kind"] == "agent_recorded_no_coverage"]
+    assert [gap["agent_name"] for gap in silent] == ["Root Agent"]

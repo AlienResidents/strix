@@ -65,21 +65,57 @@ _INCOMPLETE_RUN_STATUSES = frozenset({"failed", "interrupted", "stopped", "runni
 #: so holding one implies no coverage obligation.
 _RISK_SKILL_CATEGORY = "vulnerabilities"
 
-#: Alternate phrasings for skills whose common name and whose canonical risk
-#: wording share no words. Matching a skill to a ledger row is textual, so
-#: without these an agent that recorded "object-level authorization" would be
-#: reported as never having looked at ``idor``. Only genuine synonyms belong
-#: here — a wrong alias suppresses a real gap, which is the costlier error.
-_SKILL_ALIASES: dict[str, tuple[str, ...]] = {
-    "idor": ("object level authorization", "bola", "broken object level"),
-    "xss": ("cross site scripting",),
-    "csrf": ("cross site request forgery",),
-    "ssrf": ("server side request forgery",),
-    "rce": ("remote code execution", "command injection"),
-    "sqli": ("sql injection",),
-    "xxe": ("xml external entity",),
-    "lfi": ("local file inclusion", "path traversal"),
-    "ssti": ("server side template injection",),
+#: How each vulnerability skill can legitimately appear in a ledger row.
+#:
+#: Matching a skill to a row is textual, and a skill's filename is not how a
+#: pentester writes the class down: an agent carrying ``path_traversal_lfi_rfi``
+#: records "Path Traversal", and one carrying ``weak_password_detection``
+#: records "weak password policy". A row matches when it contains every word
+#: of *any one* phrasing here. Skills absent from this map fall back to their
+#: own words, so a new skill is merely matched strictly, never crashed on —
+#: but add an entry, because a false gap asserts something untrue in a report.
+_SKILL_PHRASINGS: dict[str, tuple[str, ...]] = {
+    "authentication_jwt": ("authentication", "jwt", "session"),
+    "broken_function_level_authorization": (
+        "function level authorization",
+        "authorization",
+        "access control",
+        "privilege escalation",
+    ),
+    "business_logic": ("business logic", "logic flaw"),
+    "csrf": ("csrf", "cross site request forgery"),
+    "header_injection": ("header injection", "host header", "crlf"),
+    "http_request_smuggling": ("request smuggling", "desync"),
+    "idor": ("idor", "object level authorization", "bola", "direct object reference"),
+    "information_disclosure": (
+        "information disclosure",
+        "information leak",
+        "sensitive data",
+        "data exposure",
+    ),
+    "insecure_deserialization": ("deserialization",),
+    "insecure_file_uploads": ("file upload",),
+    "llm_prompt_injection": ("prompt injection",),
+    "mass_assignment": ("mass assignment", "parameter binding"),
+    "nosql_injection": ("nosql",),
+    "open_redirect": ("redirect",),
+    "path_traversal_lfi_rfi": (
+        "path traversal",
+        "directory traversal",
+        "file inclusion",
+        "lfi",
+        "rfi",
+    ),
+    "prototype_pollution": ("prototype pollution",),
+    "race_conditions": ("race condition", "toctou"),
+    "rce": ("rce", "remote code execution", "code execution", "command injection"),
+    "sql_injection": ("sql injection", "sqli"),
+    "ssrf": ("ssrf", "server side request forgery"),
+    "ssti": ("ssti", "template injection"),
+    "subdomain_takeover": ("subdomain takeover",),
+    "weak_password_detection": ("password", "credential", "brute force"),
+    "xss": ("xss", "cross site scripting", "script injection"),
+    "xxe": ("xxe", "xml external entity", "xml entity"),
 }
 
 
@@ -129,6 +165,13 @@ def agents_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
     names: dict[str, Any] = raw_names if isinstance(raw_names, dict) else {}
     raw_metadata = graph.get("metadata")
     metadata: dict[str, Any] = raw_metadata if isinstance(raw_metadata, dict) else {}
+    raw_parents = graph.get("parent_of")
+    parents: dict[str, Any] = raw_parents if isinstance(raw_parents, dict) else {}
+    # Only an unambiguous root earns the exemption below. A snapshot with no
+    # parent links at all makes every agent look parentless, and excusing all
+    # of them would silently delete the silent-agent check.
+    parentless = [agent_id for agent_id in statuses if not parents.get(agent_id)]
+    root_id = parentless[0] if len(parentless) == 1 else None
 
     agents: list[dict[str, Any]] = []
     for agent_id, status in statuses.items():
@@ -143,6 +186,7 @@ def agents_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
                 "status": str(status),
                 "skills": [str(skill) for skill in skills],
                 "task": str(meta.get("task") or ""),
+                "is_root": agent_id == root_id,
             }
         )
     agents.sort(key=lambda agent: str(agent["agent_name"]))
@@ -151,7 +195,7 @@ def agents_from_graph(graph: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _skill_phrasings(skill: str) -> list[list[str]]:
     """Word lists that would each count as a ledger row naming *skill*."""
-    phrasings = [skill, *_SKILL_ALIASES.get(skill, ())]
+    phrasings = _SKILL_PHRASINGS.get(skill) or (skill,)
     return [terms for phrase in phrasings if (terms := _normalized(phrase).split())]
 
 
@@ -204,11 +248,18 @@ def skill_coverage_gaps(
 def _silent_agent_gaps(
     entries: list[dict[str, Any]], agents: list[dict[str, Any]]
 ) -> list[dict[str, Any]]:
-    """Agents that ran and recorded nothing at all."""
+    """Agents that ran and recorded nothing at all.
+
+    The root agent is exempt while it has children: it delegates and
+    reconciles rather than testing, so flagging it on every clean scan would
+    put a permanent false line in the report and teach readers to skip the
+    section. A root that ran alone tested alone, and is held to the rule.
+    """
     recorded_ids = {str(entry.get("agent_id")) for entry in entries if entry.get("agent_id")}
+    delegated = len(agents) > 1
     gaps: list[dict[str, Any]] = []
     for agent in agents:
-        if agent["agent_id"] in recorded_ids:
+        if agent["agent_id"] in recorded_ids or (agent["is_root"] and delegated):
             continue
         gaps.append(
             {
