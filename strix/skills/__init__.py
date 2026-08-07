@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 _FRONTMATTER_LINE_PATTERN = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:[ \t]*(?P<value>.*))?$")
-_BLOCK_SCALAR_PATTERN = re.compile(r"^[|>](?:(?:[1-9][+-]?)|(?:[+-]?[1-9])|[+-])?$")
+_BLOCK_SCALAR_PATTERN = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?")
 
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 _ROOT_SKILL_CATEGORY = "root"
