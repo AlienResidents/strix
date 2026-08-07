@@ -89,7 +89,7 @@ def test_available_skill_supports_colon_in_description(tmp_path: Path) -> None:
         tmp_path,
         "extra",
         "widget",
-        "---\nname: widget\ndescription: Useful widget: handles YAML\n---\nwidget body",
+        '---\nname: widget\ndescription: "Useful widget: handles YAML"\n---\nwidget body',
     )
     register_skill_dir(tmp_path)
 
@@ -133,6 +133,34 @@ def test_available_skill_normalizes_multiline_descriptions(tmp_path: Path) -> No
         "block": "First paragraph Second paragraph",
         "plain": "First line Second line",
     }
+
+
+def test_available_skill_supports_block_scalar_trailing_comment(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "commented",
+        "---\nname: commented\ndescription: | # paragraph\n"
+        "  First line\n  Second line\n---\ncommented body",
+    )
+    register_skill_dir(tmp_path)
+
+    assert get_available_skills()["extra"] == [
+        {"name": "commented", "description": "First line Second line"}
+    ]
+
+
+def test_malformed_frontmatter_keeps_skill_body(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "broken",
+        "---\nname: [broken\ndescription: should be empty\n---\nbroken body",
+    )
+    register_skill_dir(tmp_path)
+
+    assert get_available_skills()["extra"] == [{"name": "broken", "description": ""}]
+    assert load_skills(["extra/broken"]) == {"broken": "broken body"}
 
 
 def test_system_prompt_renders_skill_descriptions() -> None:

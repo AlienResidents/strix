@@ -4,6 +4,9 @@ import threading
 from collections import Counter
 from collections.abc import Iterator
 from pathlib import Path
+from typing import TypeGuard
+
+import yaml
 
 from strix.telemetry import posthog, scarf
 from strix.utils.resource_paths import get_strix_resource_path
@@ -11,15 +14,17 @@ from strix.utils.resource_paths import get_strix_resource_path
 
 logger = logging.getLogger(__name__)
 
-_FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
-_FRONTMATTER_LINE_PATTERN = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:[ \t]*(?P<value>.*))?$")
-_BLOCK_SCALAR_PATTERN = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?")
+_FRONTMATTER_PATTERN = re.compile(r"^---\s*\n(?P<body>.*?)\n---\s*\n", re.DOTALL)
 
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 _ROOT_SKILL_CATEGORY = "root"
 
 _EXTRA_SKILL_DIRS: list[Path] = []
 _SKILL_METADATA_CACHE: dict[tuple[Path, int, int], dict[str, str]] = {}
+
+
+def _is_frontmatter_mapping(value: object) -> TypeGuard[dict[object, object]]:
+    return isinstance(value, dict)
 
 
 def register_skill_dir(path: str | Path) -> None:
@@ -153,55 +158,23 @@ def _bare_skill_files(skill_name: str) -> list[Path]:
     return candidates
 
 
-def _parse_skill_content(content: str) -> tuple[dict[str, str], str]:
+def _parse_skill_content(content: str, source: Path | None = None) -> tuple[dict[str, str], str]:
     """Parse skill frontmatter once and return metadata plus markdown body."""
     frontmatter = _FRONTMATTER_PATTERN.match(content)
     if frontmatter is None:
         return {}, content.lstrip()
 
-    metadata: dict[str, str] = {}
-    lines = frontmatter.group(0).splitlines()[1:]
-    line_index = 0
-    while line_index < len(lines):
-        line = lines[line_index]
-        match = _FRONTMATTER_LINE_PATTERN.match(line)
-        if match is None:
-            line_index += 1
-            continue
-        value = match.group("value") or ""
-        is_quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"
-        line_indent = len(line) - len(line.lstrip())
-        continuation, next_index = _consume_frontmatter_continuation(
-            lines, line_index + 1, line_indent
-        )
+    try:
+        parsed: object = yaml.safe_load(frontmatter.group("body"))
+    except yaml.YAMLError as error:
+        logger.warning("Failed to parse skill frontmatter %s: %s", source or "<content>", error)
+        parsed = None
+    if not _is_frontmatter_mapping(parsed):
+        logger.warning("Skill frontmatter is not a mapping: %s", source or "<content>")
+        return {}, content[frontmatter.end() :].lstrip()
 
-        if _BLOCK_SCALAR_PATTERN.fullmatch(value):
-            value = " ".join(continuation)
-        elif value and not is_quoted and continuation:
-            value = " ".join([value, *continuation])
-        if is_quoted:
-            value = value[1:-1]
-        metadata[match.group("key")] = value
-        line_index = next_index
+    metadata = {str(key): "" if value is None else str(value) for key, value in parsed.items()}
     return metadata, content[frontmatter.end() :].lstrip()
-
-
-def _consume_frontmatter_continuation(
-    lines: list[str], start_index: int, base_indent: int
-) -> tuple[list[str], int]:
-    continuation: list[str] = []
-    index = start_index
-    while index < len(lines):
-        line = lines[index]
-        if not line.strip():
-            index += 1
-            continue
-        indent = len(line) - len(line.lstrip())
-        if indent <= base_indent:
-            break
-        continuation.append(line.strip())
-        index += 1
-    return continuation, index
 
 
 def _read_skill_metadata(file_path: Path) -> dict[str, str]:
@@ -219,7 +192,7 @@ def _read_skill_metadata(file_path: Path) -> dict[str, str]:
     except (OSError, ValueError):
         logger.warning("Failed to read skill metadata: %s", file_path)
         return {}
-    metadata, _ = _parse_skill_content(content)
+    metadata, _ = _parse_skill_content(content, file_path)
     _SKILL_METADATA_CACHE[cache_key] = metadata
     return metadata
 
@@ -317,7 +290,7 @@ def load_skills(skill_names: list[str]) -> dict[str, str]:
             continue
 
         var_name = skill_name.split("/")[-1]
-        _, skill_body = _parse_skill_content(content)
+        _, skill_body = _parse_skill_content(content, file_path)
         skill_content[var_name] = skill_body
         logger.debug("Loaded skill: %s -> %s", skill_name, var_name)
         _track_skill_loaded(var_name, file_path)
