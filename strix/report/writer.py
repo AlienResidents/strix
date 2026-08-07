@@ -107,18 +107,32 @@ def read_run_record(run_dir: Path) -> dict[str, Any]:
 
 
 def write_run_record(run_dir: Path, run_record: dict[str, Any]) -> None:
-    _atomic_write_text(
+    atomic_write_text(
         run_record_path(run_dir),
         json.dumps(run_record, ensure_ascii=False, indent=2, default=str),
     )
 
 
-def write_executive_report(run_dir: Path, final_scan_result: str) -> None:
+def write_executive_report(
+    run_dir: Path,
+    final_scan_result: str,
+    coverage_markdown: str | None = None,
+) -> None:
+    """Write the client-facing report, optionally with a coverage appendix.
+
+    ``coverage_markdown`` is rendered from the coverage ledger rather than
+    authored by an agent, so what the report claims was examined stays tied to
+    what was actually recorded.
+    """
     path = run_dir / "penetration_test_report.md"
-    with path.open("w", encoding="utf-8") as f:
-        f.write("# Security Penetration Test Report\n\n")
-        f.write(f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n\n")
-        f.write(f"{final_scan_result}\n")
+    sections = [
+        "# Security Penetration Test Report\n",
+        f"**Generated:** {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}\n",
+        f"{final_scan_result}\n",
+    ]
+    if coverage_markdown:
+        sections.append(f"{coverage_markdown.rstrip()}\n")
+    atomic_write_text(path, "\n".join(sections))
     logger.info("Saved final penetration test report to: %s", path)
 
 
@@ -133,7 +147,7 @@ def write_vulnerabilities(
     new_reports = [r for r in vulnerability_reports if r["id"] not in saved_vuln_ids]
 
     for report in new_reports:
-        _atomic_write_text(
+        atomic_write_text(
             vuln_dir / f"{report['id']}.md",
             render_vulnerability_md(report),
         )
@@ -158,9 +172,9 @@ def write_vulnerabilities(
                 "file": f"vulnerabilities/{report['id']}.md",
             },
         )
-    _atomic_write_text(csv_path, csv_buf.getvalue())
+    atomic_write_text(csv_path, csv_buf.getvalue())
 
-    _atomic_write_text(
+    atomic_write_text(
         run_dir / "vulnerabilities.json",
         json.dumps(vulnerability_reports, ensure_ascii=False, indent=2, default=str),
     )
@@ -175,7 +189,8 @@ def write_vulnerabilities(
     return len(new_reports)
 
 
-def _atomic_write_text(path: Path, payload: str) -> None:
+def atomic_write_text(path: Path, payload: str) -> None:
+    """Write *payload* to *path* via a sibling temp file and an atomic rename."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(
         mode="w",
@@ -215,6 +230,8 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
     cvss = report.get("cvss")
     if cvss is not None:
         metadata.append(("CVSS", cvss))
+    if report.get("confidence"):
+        metadata.append(("Confidence", str(report["confidence"]).title()))
     if report.get("fix_effort"):
         metadata.append(("Fix Effort", str(report["fix_effort"]).title()))
     for label, value in metadata:
@@ -234,6 +251,21 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
     if report.get("impact"):
         lines.append("## Impact\n")
         lines.append(str(report["impact"]))
+        lines.append("")
+
+    if report.get("counterevidence"):
+        lines.append("## Counterevidence\n")
+        lines.append(str(report["counterevidence"]))
+        lines.append("")
+
+    if report.get("confidence_rationale"):
+        lines.append("## Confidence Rationale\n")
+        lines.append(str(report["confidence_rationale"]))
+        lines.append("")
+
+    if report.get("severity_change_conditions"):
+        lines.append("## What Would Change This Severity\n")
+        lines.append(str(report["severity_change_conditions"]))
         lines.append("")
 
     if report.get("technical_analysis"):
@@ -287,6 +319,11 @@ def render_vulnerability_md(report: dict[str, Any]) -> str:  # noqa: PLR0912, PL
     if report.get("remediation_steps"):
         lines.append("## Remediation\n")
         lines.append(str(report["remediation_steps"]))
+        lines.append("")
+
+    if report.get("fix_verification"):
+        lines.append("## Fix Verification\n")
+        lines.append(str(report["fix_verification"]))
         lines.append("")
 
     if report.get("assumptions"):

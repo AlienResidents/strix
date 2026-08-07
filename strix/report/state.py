@@ -13,7 +13,8 @@ from agents.usage import Usage
 
 from strix.config import codex
 from strix.config.loader import load_settings
-from strix.core.paths import run_dir_for
+from strix.core.paths import run_dir_for, runtime_state_dir
+from strix.report.coverage import render_coverage_markdown, write_coverage
 from strix.report.sarif import write_sarif
 from strix.report.usage import LLMUsageLedger
 from strix.report.writer import (
@@ -432,14 +433,47 @@ class ReportState:
 {str(scan_results.get("recommendations", "")).strip()}
 """
 
+    def _coverage_document(self) -> dict[str, Any] | None:
+        """Assemble the coverage record, or None when it can't be built.
+
+        Coverage is a secondary artifact: a failure here must not cost the
+        caller its findings, so this swallows and logs rather than raising
+        into :meth:`_save_artifacts`.
+        """
+        try:
+            from strix.report.coverage import build_coverage_document, read_agent_graph
+            from strix.tools.coverage.tools import get_coverage_entries
+
+            return build_coverage_document(
+                run_record=self.run_record,
+                entries=get_coverage_entries(),
+                agent_graph=read_agent_graph(runtime_state_dir(self.get_run_dir())),
+                vulnerability_reports=self.vulnerability_reports,
+                exit_reason=self.scan_ended_exit_reason,
+            )
+        except Exception:
+            logger.exception("coverage document build failed (non-fatal)")
+            return None
+
     def _save_artifacts(self) -> None:
         """Write scan artifacts under ``run_dir``."""
         run_dir = self.get_run_dir()
         try:
             run_dir.mkdir(parents=True, exist_ok=True)
 
+            coverage = self._coverage_document()
+            if coverage is not None:
+                try:
+                    write_coverage(run_dir, coverage)
+                except OSError:
+                    logger.exception("coverage.json write failed (non-fatal)")
+
             if self.final_scan_result:
-                write_executive_report(run_dir, self.final_scan_result)
+                write_executive_report(
+                    run_dir,
+                    self.final_scan_result,
+                    render_coverage_markdown(coverage) if coverage else None,
+                )
 
             if self.vulnerability_reports:
                 write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)
@@ -456,6 +490,7 @@ class ReportState:
                     self.vulnerability_reports,
                     tool_version=_strix_version(),
                     repository_context=self._sarif_repository_context(),
+                    coverage=coverage,
                 )
             except Exception:
                 logger.exception("SARIF emit failed (non-fatal; CSV/MD unaffected)")

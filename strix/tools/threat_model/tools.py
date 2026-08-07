@@ -104,21 +104,53 @@ def _normalize_remote_target(target: str) -> str:
     return f"{authority}{path}"
 
 
+def _normalize_git_remote(remote: str) -> str:
+    """Collapse a git remote URL onto the same key its clone URL would produce.
+
+    A remote reaches us in whichever spelling the clone used —
+    ``git@github.com:org/repo.git``, ``https://github.com/org/repo``,
+    ``ssh://git@github.com/org/repo.git`` — and each is the same repository.
+    Rewriting scp-style syntax into a URL and dropping the ``.git`` suffix and
+    any embedded credentials lets :func:`_normalize_remote_target` produce one
+    identity for all of them, and crucially the *same* identity a caller gets
+    when it names the repository by its remote URL rather than by a checkout
+    path. Without that, the model saved by an agent working in the checkout is
+    invisible to an agent that asks for the repository by URL, and the two
+    derive conflicting models of one target.
+    """
+    candidate = remote.strip()
+    scp_style = re.match(r"^(?:[^@/]+@)?(?P<host>[^:/]+):(?P<path>.+)$", candidate)
+    if scp_style and "://" not in candidate:
+        candidate = f"https://{scp_style['host']}/{scp_style['path'].lstrip('/')}"
+    elif "://" in candidate:
+        # The transport a clone happened to use says nothing about which
+        # repository this is, and each scheme carries a different default
+        # port into the authority. Collapsing them all onto https keeps one
+        # repository on one key however it was cloned.
+        candidate = f"https://{candidate.split('://', 1)[1]}"
+    normalized = _normalize_remote_target(candidate)
+    return normalized.removesuffix(".git")
+
+
 def _target_identity(target: str) -> tuple[str, str]:
     """Return the (stable identity, revision) pair a cached model is keyed on.
 
     A checkout is keyed on its remote (so the same repository cloned to two
     paths shares one model, and a subdirectory resolves to the whole tree) and
     pinned to ``HEAD``. Everything else — a host, a URL, an API base, a named
-    scope — is keyed on its normalized form and carries no revision.
+    scope — is keyed on its normalized form and carries no revision. Both
+    routes run through the same normalization, so a checkout and the URL it
+    was cloned from land on one key.
     """
     directory = _local_directory(target)
     if directory is None:
-        return _normalize_remote_target(target), _UNVERSIONED
+        return _normalize_remote_target(target).removesuffix(".git"), _UNVERSIONED
     remote = _git(directory, ["config", "--get", "remote.origin.url"])
     revision = _git(directory, ["rev-parse", "HEAD"]) or _UNVERSIONED
+    if remote:
+        return _normalize_git_remote(remote), revision
     toplevel = _git(directory, ["rev-parse", "--show-toplevel"])
-    return remote or toplevel or str(directory), revision
+    return toplevel or str(directory), revision
 
 
 def _cache_path(identity: str) -> Path:

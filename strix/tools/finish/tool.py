@@ -22,6 +22,7 @@ def _do_finish(
     methodology: str,
     technical_analysis: str,
     recommendations: str,
+    agent_graph: dict[str, Any],
 ) -> dict[str, Any]:
     if parent_id is not None:
         return {
@@ -63,7 +64,7 @@ def _do_finish(
             recommendations=recommendations.strip(),
         )
         vuln_count = len(report_state.vulnerability_reports)
-        coverage_summary = _coverage_summary()
+        coverage_summary = _coverage_summary(agent_graph)
     except (ImportError, AttributeError) as e:
         logger.exception("finish_scan persistence failed")
         return {"success": False, "error": f"Failed to complete scan: {e!s}"}
@@ -82,8 +83,17 @@ def _do_finish(
         return result
 
 
-def _coverage_summary() -> dict[str, Any]:
-    """Coverage counts plus a warning when surfaces were left unresolved."""
+def _coverage_summary(agent_graph: dict[str, Any]) -> dict[str, Any]:
+    """Coverage counts, unresolved surfaces, and gaps the runtime can see.
+
+    The gap list is derived from the agent graph rather than from the ledger,
+    so it catches the failure the ledger cannot: a risk class an agent was
+    equipped for and never accounted for. Surfacing it here — in the response
+    to the call that ends the scan — is the last point at which the root agent
+    can still dispatch work or record the class as unresolved instead of
+    letting the report imply it was clean.
+    """
+    from strix.report.coverage import agents_from_graph, skill_coverage_gaps
     from strix.tools.coverage.tools import get_coverage_entries, outcome_counts
 
     entries = get_coverage_entries()
@@ -113,6 +123,15 @@ def _coverage_summary() -> dict[str, Any]:
             {"surface": e.get("surface", ""), "risk_area": e.get("risk_area", "")}
             for e in unresolved
         ]
+
+    gaps = skill_coverage_gaps(entries, agents_from_graph(agent_graph))
+    if gaps:
+        summary["coverage_gaps"] = [gap["detail"] for gap in gaps]
+        summary["coverage_gap_warning"] = (
+            f"{len(gaps)} risk class(es) assigned to agents have no coverage entry and "
+            "will be published as unexamined. Record them (or a needs_follow_up row) "
+            "before the report goes out."
+        )
     return summary
 
 
@@ -210,15 +229,13 @@ async def finish_scan(
         - ``methodology`` — frameworks followed (OWASP WSTG, PTES,
           OSSTMM, NIST), engagement type (black/gray/white box), scope
           and constraints, categories of testing performed. **No**
-          internal execution detail. End this section with a
-          **Reviewed Surfaces** markdown table built from
-          ``list_coverage`` — columns ``Surface`` | ``Risk Area`` |
-          ``Outcome`` | ``Notes`` — so the reader can see what was
-          examined and cleared, not only what was found. Render
-          outcomes in client-facing language (``Finding reported``,
-          ``No issue identified``, ``Not applicable``, ``Requires
-          further review``). If any surface requires further review,
-          call that out explicitly beneath the table.
+          internal execution detail. Do **not** hand-write a table of
+          reviewed surfaces here: the report gains a ``Coverage``
+          section rendered directly from the coverage ledger, and a
+          transcribed copy would only drift from it. Describe the
+          approach and the classes of testing, and reconcile the ledger
+          via ``list_coverage`` (step 5) so that rendered section is
+          complete and honest.
         - ``technical_analysis`` — consolidated findings overview with
           severity model and systemic root causes. Reference individual
           vuln reports for repro steps; don't duplicate raw evidence.
@@ -333,6 +350,7 @@ async def finish_scan(
         methodology=methodology,
         technical_analysis=technical_analysis,
         recommendations=recommendations,
+        agent_graph=await coordinator.snapshot() if coordinator is not None else {},
     )
     if (
         result.get("success")

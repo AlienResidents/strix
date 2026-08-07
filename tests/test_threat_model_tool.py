@@ -307,3 +307,37 @@ def test_repository_subdirectory_shares_the_repository_model(tmp_path: Path) -> 
     _save_impl(str(repo), _MODEL, "root")
 
     assert _get_impl(str(repo / "src"))["found"] is True
+
+
+def test_checkout_and_its_clone_url_are_one_identity(tmp_path: Path) -> None:
+    """The model an agent saves inside the checkout must be visible to an agent
+    that names the same repository by the URL it was cloned from."""
+    repo = _make_repo(tmp_path)
+    _git(repo, "remote", "add", "origin", "https://github.com/acme/billing.git")
+    _save_impl(str(repo), _MODEL, "root")
+
+    assert _get_impl("https://github.com/acme/billing")["found"] is True
+    assert _get_impl("https://github.com/acme/billing.git")["found"] is True
+
+
+def test_ssh_and_https_remotes_are_one_identity(tmp_path: Path) -> None:
+    """One repository cloned over scp-style SSH and over HTTPS is one target."""
+    over_ssh = _make_repo(tmp_path, "ssh-clone")
+    _git(over_ssh, "remote", "add", "origin", "git@github.com:acme/billing.git")
+    _save_impl(str(over_ssh), _MODEL, "root")
+
+    over_https = _make_repo(tmp_path, "https-clone")
+    _git(over_https, "remote", "add", "origin", "https://github.com/acme/billing.git")
+
+    assert _get_impl(str(over_https))["found"] is True
+
+
+def test_different_repositories_on_one_host_stay_separate(tmp_path: Path) -> None:
+    first = _make_repo(tmp_path, "billing")
+    _git(first, "remote", "add", "origin", "git@github.com:acme/billing.git")
+    _save_impl(str(first), _MODEL, "root")
+
+    second = _make_repo(tmp_path, "payments")
+    _git(second, "remote", "add", "origin", "git@github.com:acme/payments.git")
+
+    assert _get_impl(str(second))["found"] is False

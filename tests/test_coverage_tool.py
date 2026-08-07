@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -237,3 +240,45 @@ def test_a_different_risk_area_on_one_surface_is_still_its_own_entry() -> None:
 
     assert second["success"] is True
     assert len(get_coverage_entries()) == 2
+
+
+def test_concurrent_records_of_one_surface_yield_a_single_row() -> None:
+    """Duplicate detection and insertion must be one critical section.
+
+    Two agents recording the same surface at the same moment would otherwise
+    both pass the "no duplicate" check, and the report would show a stale
+    conclusion beside its replacement — the exact outcome the rejection exists
+    to prevent.
+    """
+    barrier = threading.Barrier(8)
+
+    def attempt(index: int) -> dict[str, Any]:
+        barrier.wait()
+        return _record(agent_id=f"agent-{index}", agent_name=f"tester-{index}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(attempt, range(8)))
+
+    assert sum(1 for result in results if result["success"]) == 1
+    assert len(get_coverage_entries()) == 1
+
+
+def test_concurrent_records_all_survive_persistence(coverage_store: Path) -> None:
+    """A writer holding an older snapshot must not win the rename.
+
+    If it did, the mirror would come back short on resume and coverage
+    recorded before a crash would silently disappear from the report.
+    """
+    barrier = threading.Barrier(8)
+
+    def attempt(index: int) -> dict[str, Any]:
+        barrier.wait()
+        return _record(surface=f"GET /api/resource/{index}", agent_id=f"agent-{index}")
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(attempt, range(8)))
+
+    persisted = json.loads((coverage_store / "coverage.json").read_text(encoding="utf-8"))
+    assert len(persisted) == 8
+    hydrate_coverage_from_disk(coverage_store)
+    assert len(get_coverage_entries()) == 8

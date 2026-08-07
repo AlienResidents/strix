@@ -4,6 +4,13 @@ Findings answer "what did we find". Coverage answers "what did we look at,
 and how did each one close" — the negative space a client report needs in
 order to be trustworthy. Every agent records the surfaces it reviewed; the
 root agent reconciles them at the end of the scan.
+
+Entries here are **agent-reported**: an agent's own account of what it
+assessed. ``strix.report.coverage`` pairs them with machine-observed facts
+(which agents ran, which skills they carried, how the run terminated) and
+labels the provenance of each, so a reader can tell a self-report from an
+observation. The runtime mirror under ``{state_dir}`` exists for resume; the
+client-facing artifact is ``{run_dir}/coverage.json``.
 """
 
 from __future__ import annotations
@@ -96,13 +103,19 @@ def hydrate_coverage_from_disk(state_dir: Path) -> None:
         )
 
 
-def _persist() -> None:
+def _persist_locked() -> None:
+    """Mirror the ledger to disk. Callers must already hold ``_coverage_lock``.
+
+    Serialization and the rename happen in one critical section. Releasing
+    the lock in between would let a writer holding an older serialization win
+    the rename and silently roll back a concurrent agent's entry, so the
+    ledger would hydrate short on resume.
+    """
     path = _coverage_path
     if path is None:
         return
     try:
-        with _coverage_lock:
-            payload = json.dumps(_coverage_storage, ensure_ascii=False, default=str)
+        payload = json.dumps(_coverage_storage, ensure_ascii=False, default=str)
         path.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -155,17 +168,23 @@ def _validate(
     return normalized, errors
 
 
-def _duplicate_of(surface: str, risk_area: str) -> tuple[str, dict[str, Any]] | None:
-    """Find an existing row for this exact surface and risk area."""
+def _duplicate_of_locked(surface: str, risk_area: str) -> tuple[str, dict[str, Any]] | None:
+    """Find an existing row for this exact surface and risk area.
+
+    Callers must already hold ``_coverage_lock``. The uniqueness check and the
+    insertion that depends on it have to be one critical section: otherwise
+    two agents recording the same surface concurrently both see "no
+    duplicate", and the ledger ends up with exactly the parallel rows this
+    rejection exists to prevent.
+    """
     key = (surface.strip().lower(), risk_area.strip().lower())
-    with _coverage_lock:
-        for entry_id, entry in _coverage_storage.items():
-            existing = (
-                str(entry.get("surface", "")).strip().lower(),
-                str(entry.get("risk_area", "")).strip().lower(),
-            )
-            if existing == key:
-                return entry_id, dict(entry)
+    for entry_id, entry in _coverage_storage.items():
+        existing = (
+            str(entry.get("surface", "")).strip().lower(),
+            str(entry.get("risk_area", "")).strip().lower(),
+        )
+        if existing == key:
+            return entry_id, dict(entry)
     return None
 
 
@@ -184,26 +203,6 @@ def _record_impl(
     if errors:
         return {"success": False, "error": "Validation failed", "errors": errors}
 
-    duplicate = _duplicate_of(surface, risk_area)
-    if duplicate is not None:
-        existing_id, existing = duplicate
-        owner = existing.get("agent_name") or "another agent"
-        return {
-            "success": False,
-            "error": (
-                f"'{surface.strip()}' ({risk_area.strip()}) already has coverage entry "
-                f"{existing_id}, recorded by {owner} as "
-                f"'{existing.get('outcome', '')}'. Two rows for one surface leave the "
-                "report showing a stale conclusion beside its replacement. If your "
-                "review reached a different conclusion, move that entry with "
-                f"update_coverage(entry_id='{existing_id}', ...) and say in evidence "
-                "what changed. If you reviewed something genuinely different, name the "
-                "surface or risk area more precisely and record it again."
-            ),
-            "existing_entry_id": existing_id,
-            "existing_outcome": existing.get("outcome", ""),
-        }
-
     entry: dict[str, Any] = {
         "surface": surface.strip(),
         "risk_area": risk_area.strip(),
@@ -218,11 +217,31 @@ def _record_impl(
         entry["agent_name"] = agent_name
 
     with _coverage_lock:
+        duplicate = _duplicate_of_locked(surface, risk_area)
+        if duplicate is not None:
+            existing_id, existing = duplicate
+            owner = existing.get("agent_name") or "another agent"
+            return {
+                "success": False,
+                "error": (
+                    f"'{surface.strip()}' ({risk_area.strip()}) already has coverage entry "
+                    f"{existing_id}, recorded by {owner} as "
+                    f"'{existing.get('outcome', '')}'. Two rows for one surface leave the "
+                    "report showing a stale conclusion beside its replacement. If your "
+                    "review reached a different conclusion, move that entry with "
+                    f"update_coverage(entry_id='{existing_id}', ...) and say in evidence "
+                    "what changed. If you reviewed something genuinely different, name the "
+                    "surface or risk area more precisely and record it again."
+                ),
+                "existing_entry_id": existing_id,
+                "existing_outcome": existing.get("outcome", ""),
+            }
+
         entry_id = _generate_entry_id()
         if entry_id is None:
             return {"success": False, "error": "Could not allocate a coverage entry id"}
         _coverage_storage[entry_id] = entry
-    _persist()
+        _persist_locked()
     logger.info(
         "Coverage recorded: id=%s outcome=%s surface=%s",
         entry_id,
@@ -284,7 +303,7 @@ def _update_impl(
             existing["agent_id"] = agent_id
         if agent_name:
             existing["agent_name"] = agent_name
-    _persist()
+        _persist_locked()
     logger.info(
         "Coverage updated: id=%s %s -> %s surface=%s",
         key,
