@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _FRONTMATTER_PATTERN = re.compile(r"^---\s*\n.*?\n---\s*\n", re.DOTALL)
 _FRONTMATTER_LINE_PATTERN = re.compile(r"^(?P<key>[A-Za-z_][\w-]*):(?:[ \t]*(?P<value>.*))?$")
+_BLOCK_SCALAR_PATTERN = re.compile(r"^[|>](?:(?:[1-9][+-]?)|(?:[+-]?[1-9])|[+-])?$")
 
 _INTERNAL_SKILL_CATEGORIES: frozenset[str] = frozenset({"scan_modes", "coordination"})
 _ROOT_SKILL_CATEGORY = "root"
@@ -159,15 +160,47 @@ def _parse_skill_content(content: str) -> tuple[dict[str, str], str]:
         return {}, content.lstrip()
 
     metadata: dict[str, str] = {}
-    for line in frontmatter.group(0).splitlines()[1:]:
+    lines = frontmatter.group(0).splitlines()[1:]
+    line_index = 0
+    while line_index < len(lines):
+        line = lines[line_index]
         match = _FRONTMATTER_LINE_PATTERN.match(line)
         if match is None:
+            line_index += 1
             continue
         value = match.group("value") or ""
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+        is_quoted = len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'"
+        line_indent = len(line) - len(line.lstrip())
+        continuation, next_index = _consume_frontmatter_continuation(
+            lines, line_index + 1, line_indent
+        )
+
+        if _BLOCK_SCALAR_PATTERN.fullmatch(value):
+            value = " ".join(continuation)
+        elif value and not is_quoted and continuation:
+            value = " ".join([value, *continuation])
+        if is_quoted:
             value = value[1:-1]
         metadata[match.group("key")] = value
+        line_index = next_index
     return metadata, content[frontmatter.end() :].lstrip()
+
+
+def _consume_frontmatter_continuation(
+    lines: list[str], start_index: int, base_indent: int
+) -> tuple[list[str], int]:
+    continuation: list[str] = []
+    index = start_index
+    while index < len(lines):
+        line = lines[index]
+        if not line.strip():
+            break
+        indent = len(line) - len(line.lstrip())
+        if indent <= base_indent:
+            break
+        continuation.append(line.strip())
+        index += 1
+    return continuation, index
 
 
 def _read_skill_metadata(file_path: Path) -> dict[str, str]:

@@ -112,6 +112,28 @@ def test_available_skill_normalizes_quoted_description(tmp_path: Path) -> None:
     ]
 
 
+def test_available_skill_normalizes_multiline_descriptions(tmp_path: Path) -> None:
+    _write_skill(
+        tmp_path,
+        "extra",
+        "block",
+        "---\nname: block\ndescription: |\n  First line\n  Second line\n---\nblock body",
+    )
+    _write_skill(
+        tmp_path,
+        "extra",
+        "plain",
+        "---\nname: plain\ndescription: First line\n  Second line\n---\nplain body",
+    )
+    register_skill_dir(tmp_path)
+
+    available = {skill["name"]: skill["description"] for skill in get_available_skills()["extra"]}
+    assert available == {
+        "block": "First line Second line",
+        "plain": "First line Second line",
+    }
+
+
 def test_system_prompt_renders_skill_descriptions() -> None:
     prompt = render_system_prompt(scan_mode="quick", is_root=True)
 
