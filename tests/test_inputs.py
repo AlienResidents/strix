@@ -11,6 +11,7 @@ import pytest
 from strix.core.inputs import (
     build_root_task,
     build_scan_targets,
+    build_scope_context,
     child_initial_input,
     make_model_settings,
 )
@@ -205,6 +206,34 @@ def test_build_root_task_web_application_with_instructions() -> None:
     assert "URLs:" in task
     assert "https://app.example.com" in task
     assert "Special instructions: Focus on auth." in task
+
+
+def test_build_root_task_workspace_mount_is_not_a_target() -> None:
+    """A target-less run gets a working directory, not an assessment scope."""
+    config = {
+        "targets": [],
+        "user_instructions": "Find IDOR in the checkout flow.",
+        "workspace_mount": "/Users/me/code/api",
+        "workspace_subdir": "api",
+    }
+    task = build_root_task(config)
+
+    assert "Working Directory:" in task
+    assert "/workspace/api" in task
+    assert "No scan target was set" in task
+    assert "Special instructions: Find IDOR in the checkout flow." in task
+    # It must not be presented as an asset to test.
+    for label in ("Local Codebases:", "Repositories:", "URLs:", "IP Addresses:"):
+        assert label not in task
+
+
+def test_build_scope_context_authorizes_nothing_without_targets() -> None:
+    """A mounted workspace grants no authorized scope."""
+    scope = build_scope_context(
+        {"targets": [], "workspace_mount": "/Users/me/code/api", "workspace_subdir": "api"}
+    )
+
+    assert scope["authorized_targets"] == []
 
 
 def test_build_root_task_diff_scope() -> None:

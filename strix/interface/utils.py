@@ -11,7 +11,7 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import parse_qs, urlparse
 
 import docker
 import requests
@@ -21,6 +21,7 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.config import load_settings
+from strix.utils.api_spec import detect_spec_format
 
 
 logger = logging.getLogger(__name__)
@@ -252,7 +253,7 @@ def _llm_usage(report_state: Any) -> dict[str, Any]:
     return usage if isinstance(usage, dict) else {}
 
 
-def _is_subscription(report_state: Any) -> bool:
+def is_subscription_run(report_state: Any) -> bool:
     """Whether this run uses a model subscription (no metered cost).
 
     Prefers the run record so it's correct for hydrated/resumed runs; falls back
@@ -301,7 +302,7 @@ def _build_llm_usage_stats(
     *,
     live: bool = False,
 ) -> None:
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     usage = _llm_usage(report_state)
     if not usage or _int_stat(usage, "requests") <= 0:
         stats_text.append("\n")
@@ -365,7 +366,7 @@ def build_live_stats_text(report_state: Any) -> Text:
     model = load_settings().llm.model or "unknown"
     stats_text.append("Model ", style="dim")
     stats_text.append(str(model), style="white")
-    if _is_subscription(report_state):
+    if is_subscription_run(report_state):
         stats_text.append("  ·  ", style="dim white")
         stats_text.append("ChatGPT subscription", style="#22c55e")
     stats_text.append("\n")
@@ -410,7 +411,7 @@ def build_tui_stats_text(report_state: Any) -> Text:
 
     model = load_settings().llm.model or "unknown"
     stats_text.append(str(model), style="white")
-    subscription = _is_subscription(report_state)
+    subscription = is_subscription_run(report_state)
     if subscription:
         stats_text.append("\n")
         stats_text.append("ChatGPT subscription", style="#22c55e")
@@ -483,6 +484,15 @@ def _derive_target_label_for_run_name(targets_info: list[dict[str, Any]] | None)
 
     if target_type == "ip_address":
         return str(details.get("target_ip", original) or original)
+
+    if target_type == "api_spec":
+        if details.get("source") == "postman_api":
+            return "postman-collection"
+        spec_path = details.get("target_spec", original)
+        try:
+            return str(Path(spec_path).stem or spec_path)
+        except Exception:
+            return str(spec_path)
 
     return str(original or "pentest")
 
@@ -1092,12 +1102,12 @@ def resolve_diff_scope_context(
 def _is_http_git_repo(url: str) -> bool:
     check_url = f"{url.rstrip('/')}/info/refs?service=git-upload-pack"
     try:
-        resp = requests.get(check_url, headers={"User-Agent": "git/strix"}, timeout=10)
+        with requests.get(check_url, headers={"User-Agent": "git/2.43.0"}, timeout=10) as resp:
+            if resp.status_code >= 400:
+                return resp.status_code == 401
+            return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
     except (requests.RequestException, ValueError):
         return False
-    if resp.status_code >= 400:
-        return resp.status_code == 401
-    return "x-git-upload-pack-advertisement" in resp.headers.get("Content-Type", "")
 
 
 def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR0911
@@ -1113,6 +1123,24 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
         return "repository", {"target_repo": target}
 
     parsed = urlparse(target)
+    if parsed.scheme == "postman":
+        collection_uid = f"{parsed.netloc}{parsed.path}".strip("/")
+        if not collection_uid:
+            raise ValueError(
+                f"Missing Postman collection id in '{target}' (expected postman://<collection-uid>)"
+            )
+        details = {
+            "target_spec": target,
+            "spec_format": "postman",
+            "source": "postman_api",
+            "collection_uid": collection_uid,
+        }
+        query = parse_qs(parsed.query)
+        env_uid = (query.get("env") or query.get("environment") or [""])[0].strip()
+        if env_uid:
+            details["environment_uid"] = env_uid
+        return "api_spec", details
+
     if parsed.scheme in ("http", "https"):
         if parsed.username or parsed.password:
             return "repository", {"target_repo": target}
@@ -1138,6 +1166,12 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
             if path.is_dir():
                 check_mountable_dir(path)
                 return "local_code", {"target_path": str(path.resolve())}
+            spec_format = detect_spec_format(path)
+            if spec_format is not None:
+                return "api_spec", {
+                    "target_spec": str(path.resolve()),
+                    "spec_format": spec_format,
+                }
             raise ValueError(f"Path exists but is not a directory: {target}")
     except (OSError, RuntimeError) as e:
         raise ValueError(f"Invalid path: {target} - {e!s}") from e
@@ -1164,6 +1198,9 @@ def infer_target_type(target: str) -> tuple[str, dict[str, str]]:  # noqa: PLR09
         "- A valid URL (http:// or https://)\n"
         "- A Git repository URL (https://host/org/repo or git@host:org/repo.git)\n"
         "- A local directory path\n"
+        "- An API spec file (OpenAPI/Swagger .json/.yaml or a Postman collection)\n"
+        "- A Postman collection by id (postman://<collection-uid>[?env=<environment-uid>], "
+        "needs POSTMAN_API_KEY)\n"
         "- A domain name (e.g., example.com)\n"
         "- An IP address (e.g., 192.168.1.10)"
     )
@@ -1438,6 +1475,62 @@ def rewrite_localhost_targets(targets_info: list[dict[str, Any]], host_gateway: 
                 details["target_ip"] = host_gateway
 
 
+#: API spec targets are copied into one workspace directory rather than mounted
+#: from wherever they happen to live on the host.
+API_SPEC_WORKSPACE_SUBDIR = "api-specs"
+
+
+def write_fetched_collection(collection: dict[str, Any], collection_uid: str) -> str:
+    """Write a collection fetched from the Postman API to a local file.
+
+    Returns the file path, so a ``postman://`` target continues as an ordinary
+    spec file from here on and the API key never leaves the host.
+    """
+    staging = Path(tempfile.gettempdir()) / "strix_api_specs" / "fetched"
+    staging.mkdir(parents=True, exist_ok=True)
+    path = staging / f"{sanitize_name(collection_uid)}.postman_collection.json"
+    path.write_text(json.dumps(collection, indent=2), encoding="utf-8")
+    return str(path)
+
+
+def stage_api_specs(targets_info: list[dict[str, Any]], run_name: str) -> list[dict[str, Any]]:
+    """Copy every ``api_spec`` target into one directory for the sandbox.
+
+    A spec is a single file the agent reads, not a tree it works in, so it is
+    copied to a per-run staging directory that is exposed at
+    ``/workspace/api-specs`` instead of mounting its host location. Each target's
+    ``workspace_path`` records where the agent will find it.
+    """
+    specs = [t for t in targets_info if t.get("type") == "api_spec"]
+    if not specs:
+        return []
+
+    staging = Path(tempfile.gettempdir()) / "strix_api_specs" / run_name
+    staging.mkdir(parents=True, exist_ok=True)
+
+    used: set[str] = set()
+    for target in specs:
+        details = target["details"]
+        source = Path(str(details["target_spec"]))
+        name = source.name
+        stem, suffix = source.stem, source.suffix
+        count = 1
+        while name in used:
+            count += 1
+            name = f"{stem}-{count}{suffix}"
+        used.add(name)
+        shutil.copy2(source, staging / name)
+        details["workspace_path"] = f"/workspace/{API_SPEC_WORKSPACE_SUBDIR}/{name}"
+
+    return [
+        {
+            "source_path": str(staging),
+            "workspace_subdir": API_SPEC_WORKSPACE_SUBDIR,
+            "protect_metadata": False,
+        }
+    ]
+
+
 def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None) -> str:
     console = Console()
 
@@ -1475,43 +1568,13 @@ def clone_repository(repo_url: str, run_name: str, dest_name: str | None = None)
         return str(clone_path.absolute())
 
     except subprocess.CalledProcessError as e:
-        error_text = Text()
-        error_text.append("REPOSITORY CLONE FAILED", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append(f"Could not clone repository: {repo_url}\n", style="white")
-        error_text.append(
-            f"Error: {e.stderr if hasattr(e, 'stderr') and e.stderr else str(e)}", style="dim red"
-        )
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
-    except FileNotFoundError:
-        error_text = Text()
-        error_text.append("GIT NOT FOUND", style="bold red")
-        error_text.append("\n\n", style="white")
-        error_text.append("Git is not installed or not available in PATH.\n", style="white")
-        error_text.append("Please install Git to clone repositories.\n", style="white")
-
-        panel = Panel(
-            error_text,
-            title="[bold white]STRIX",
-            title_align="left",
-            border_style="red",
-            padding=(1, 2),
-        )
-        console.print("\n")
-        console.print(panel)
-        console.print()
-        sys.exit(1)
+        detail = e.stderr if hasattr(e, "stderr") and e.stderr else str(e)
+        raise ValueError(f"Could not clone repository {repo_url}: {detail}") from e
+    except FileNotFoundError as e:
+        raise ValueError(
+            "Git is not installed or not available in PATH. "
+            "Please install Git to clone repositories."
+        ) from e
 
 
 def check_docker_connection() -> Any:

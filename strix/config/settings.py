@@ -26,6 +26,7 @@ class LlmSettings(BaseSettings):
     api_key: str | None = Field(
         default=None,
         validation_alias=AliasChoices("LLM_API_KEY", "OPENAI_API_KEY"),
+        repr=False,
     )
     api_base: str | None = Field(
         default=None,
@@ -40,6 +41,7 @@ class LlmSettings(BaseSettings):
     extra_headers: dict[str, str] | None = Field(
         default=None,
         alias="LLM_EXTRA_HEADERS",
+        repr=False,
     )
     reasoning_effort: ReasoningEffort = Field(default="high", alias="STRIX_REASONING_EFFORT")
     force_required_tool_choice: bool = Field(
@@ -55,6 +57,12 @@ class LlmSettings(BaseSettings):
         alias="LLM_DISABLE_STREAMING",
     )
     timeout: int = Field(default=300, alias="LLM_TIMEOUT")
+    stream_idle_timeout: int = Field(default=300, ge=0, alias="LLM_STREAM_IDLE_TIMEOUT")
+    max_tool_calls_per_turn: int = Field(
+        default=32,
+        ge=0,
+        alias="LLM_MAX_TOOL_CALLS_PER_TURN",
+    )
 
 
 class DedupeSettings(BaseSettings):
@@ -65,11 +73,12 @@ class DedupeSettings(BaseSettings):
         default=None,
         alias="STRIX_DEDUPE_REASONING_EFFORT",
     )
-    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY")
+    api_key: str | None = Field(default=None, alias="DEDUPE_LLM_API_KEY", repr=False)
     api_base: str | None = Field(default=None, alias="DEDUPE_LLM_API_BASE")
     extra_headers: dict[str, str] | None = Field(
         default=None,
         alias="DEDUPE_LLM_EXTRA_HEADERS",
+        repr=False,
     )
 
 
@@ -97,7 +106,7 @@ class RuntimeSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
     image: str = Field(
-        default="ghcr.io/usestrix/strix-sandbox:1.2.0",
+        default="ghcr.io/usestrix/strix-sandbox:1.3.0",
         alias="STRIX_IMAGE",
     )
     backend: str = Field(default="docker", alias="STRIX_RUNTIME_BACKEND")
@@ -114,7 +123,16 @@ class TelemetrySettings(BaseSettings):
 class IntegrationSettings(BaseSettings):
     model_config = _BASE_CONFIG
 
-    perplexity_api_key: str | None = Field(default=None, alias="PERPLEXITY_API_KEY")
+    perplexity_api_key: str | None = Field(
+        default=None,
+        alias="PERPLEXITY_API_KEY",
+        repr=False,
+    )
+    postman_api_key: str | None = Field(
+        default=None,
+        alias="POSTMAN_API_KEY",
+        repr=False,
+    )
 
 
 class ViewerSettings(BaseSettings):

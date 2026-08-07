@@ -275,6 +275,9 @@ async def run_strix_scan(
             model_settings=model_settings,
             sandbox=SandboxRunConfig(client=bundle["client"], session=bundle["session"]),
             trace_include_sensitive_data=False,
+            # A hallucinated tool name is a recoverable model mistake, not a scan-ending
+            # error: hand it back as a tool result so the agent can correct itself.
+            tool_not_found_behavior="return_error_to_model",
         )
         hooks = ReportUsageHooks(
             model=resolved_model,
@@ -298,7 +301,7 @@ async def run_strix_scan(
         )
 
         root_agent = build_strix_agent(
-            name="Strix",
+            name="Root Agent",
             skills=skills,
             is_root=True,
             scan_mode=scan_mode,
@@ -313,7 +316,7 @@ async def run_strix_scan(
         if not is_resume:
             await coordinator.register(
                 root_id,
-                "Strix",
+                "Root Agent",
                 parent_id=None,
                 task=root_task,
                 skills=skills,

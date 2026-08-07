@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import inspect
+import logging
 import os
 import time
-from typing import TYPE_CHECKING, Any
+from collections.abc import AsyncGenerator
+from typing import TYPE_CHECKING, Any, cast
 
 from agents import (
     set_default_openai_api,
@@ -24,12 +27,19 @@ from agents.retry import (
     RetryPolicyContext,
     retry_policies,
 )
-from openai.types.responses import Response, ResponseCompletedEvent
+from openai.types.responses import (
+    Response,
+    ResponseCompletedEvent,
+    ResponseOutputItemAddedEvent,
+    ResponseOutputItemDoneEvent,
+)
 from openai.types.responses.response_usage import ResponseUsage
 from openai.types.shared import Reasoning
 
 from strix.config import codex
 from strix.config.loader import load_settings
+from strix.config.tool_call_ids import TurnCallIdRewriter, dedupe_input
+from strix.config.tool_call_limits import TurnToolCallLimiter
 
 
 if TYPE_CHECKING:
@@ -46,6 +56,9 @@ if TYPE_CHECKING:
     from openai.types.responses.response_prompt_param import ResponsePromptParam
 
     from strix.config.settings import LlmSettings, ReasoningEffort, Settings
+
+
+logger = logging.getLogger(__name__)
 
 
 def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | None:
@@ -229,6 +242,170 @@ class _NonStreamingModel(Model):
         yield _completed_stream_event(response, getattr(self._inner, "model", None))
 
 
+class _TurnGuardModel(Model):
+    """Keep one turn from corrupting the conversation or running away.
+
+    Tool-call ids: providers that number calls per turn (``exec_command:0``,
+    ...) restart the counter each turn, so the same id eventually appears twice
+    in one conversation and strict providers reject every subsequent request.
+    Ids that collide with the history are rewritten before the turn is
+    recorded, and already-corrupted histories are repaired on the way out.
+
+    Tool-call volume: a degenerate response can queue hundreds of calls that
+    the run loop then honours one by one. Only the first
+    ``LLM_MAX_TOOL_CALLS_PER_TURN`` calls of a response are kept.
+
+    Stalled streams: a turn that emits a few tokens and then goes silent is
+    not covered by the request timeout, which resets on any byte (keepalives
+    included). ``LLM_STREAM_IDLE_TIMEOUT`` bounds the gap between events so the
+    turn fails instead of hanging, and the existing retry path replays it.
+    """
+
+    def __init__(
+        self,
+        inner: Model,
+        *,
+        max_tool_calls_per_turn: int = 0,
+        stream_idle_timeout: float = 0.0,
+    ) -> None:
+        self._inner = inner
+        self._max_tool_calls_per_turn = max_tool_calls_per_turn
+        self._stream_idle_timeout = stream_idle_timeout
+
+    def _limiter(self) -> TurnToolCallLimiter:
+        return TurnToolCallLimiter(self._max_tool_calls_per_turn)
+
+    def _log_dropped(self, limiter: TurnToolCallLimiter) -> None:
+        if limiter.dropped:
+            logger.warning(
+                "dropped %d tool call(s) past the per-response limit of %d",
+                limiter.dropped,
+                self._max_tool_calls_per_turn,
+            )
+
+    async def close(self) -> None:
+        await self._inner.close()
+
+    def get_retry_advice(self, request: ModelRetryAdviceRequest) -> ModelRetryAdvice | None:
+        return self._inner.get_retry_advice(request)
+
+    async def get_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None,
+        conversation_id: str | None,
+        prompt: ResponsePromptParam | None,
+    ) -> ModelResponse:
+        sanitized = dedupe_input(input)
+        rewriter = TurnCallIdRewriter(sanitized)
+        response = await self._inner.get_response(
+            system_instructions,
+            cast("str | list[TResponseInputItem]", sanitized),
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+        limiter = self._limiter()
+        response.output = limiter.filter_items(rewriter.rewrite_items(list(response.output)))
+        self._log_dropped(limiter)
+        return response
+
+    async def stream_response(
+        self,
+        system_instructions: str | None,
+        input: str | list[TResponseInputItem],  # noqa: A002
+        model_settings: ModelSettings,
+        tools: list[Tool],
+        output_schema: AgentOutputSchemaBase | None,
+        handoffs: list[Handoff],
+        tracing: ModelTracing,
+        *,
+        previous_response_id: str | None,
+        conversation_id: str | None,
+        prompt: ResponsePromptParam | None,
+    ) -> AsyncIterator[TResponseStreamEvent]:
+        sanitized = dedupe_input(input)
+        rewriter = TurnCallIdRewriter(sanitized)
+        limiter = self._limiter()
+        stream = self._inner.stream_response(
+            system_instructions,
+            cast("str | list[TResponseInputItem]", sanitized),
+            model_settings,
+            tools,
+            output_schema,
+            handoffs,
+            tracing,
+            previous_response_id=previous_response_id,
+            conversation_id=conversation_id,
+            prompt=prompt,
+        )
+        async for event in _with_idle_timeout(stream, self._stream_idle_timeout):
+            guarded = _guard_event(event, rewriter, limiter)
+            if guarded is not None:
+                yield guarded
+        self._log_dropped(limiter)
+
+
+async def _aclose(stream: AsyncIterator[TResponseStreamEvent]) -> None:
+    if isinstance(stream, AsyncGenerator):
+        with contextlib.suppress(Exception):
+            await stream.aclose()
+
+
+async def _with_idle_timeout(
+    stream: AsyncIterator[TResponseStreamEvent], timeout: float
+) -> AsyncIterator[TResponseStreamEvent]:
+    if timeout <= 0:
+        async for event in stream:
+            yield event
+        return
+
+    iterator = stream.__aiter__()
+    while True:
+        try:
+            event = await asyncio.wait_for(iterator.__anext__(), timeout)
+        except StopAsyncIteration:
+            return
+        except TimeoutError:
+            await _aclose(stream)
+            message = f"model stream produced no event for {timeout:.0f}s"
+            logger.warning("%s; abandoning the turn", message)
+            raise TimeoutError(message) from None
+        yield event
+
+
+def _guard_event(
+    event: TResponseStreamEvent, rewriter: TurnCallIdRewriter, limiter: TurnToolCallLimiter
+) -> TResponseStreamEvent | None:
+    if isinstance(event, ResponseOutputItemAddedEvent | ResponseOutputItemDoneEvent):
+        rewritten = rewriter.rewrite_item(event.item)
+        if not limiter.allow(rewritten):
+            return None
+        if rewritten is not event.item:
+            return event.model_copy(update={"item": rewritten})
+        return event
+    if isinstance(event, ResponseCompletedEvent):
+        original = list(event.response.output)
+        output = limiter.filter_items(rewriter.rewrite_items(original))
+        if output != original:
+            return event.model_copy(
+                update={"response": event.response.model_copy(update={"output": output})}
+            )
+    return event
+
+
 def _completed_stream_event(
     model_response: ModelResponse, model_name: object | None
 ) -> TResponseStreamEvent:
@@ -294,19 +471,29 @@ class StrixProvider(MultiProvider):
     def get_model(self, model_name: str | None) -> Model:
         llm = load_settings().llm
         slug = codex.subscription_model(model_name)
+        idle_timeout = float(llm.stream_idle_timeout)
         if slug:
             # The ChatGPT subscription backend is always streamed; it has no
             # non-streaming mode to fall back to, so LLM_DISABLE_STREAMING
             # does not apply here.
-            return _CodexResponsesModel(
+            model: Model = _CodexResponsesModel(
                 slug,
                 codex.get_subscription_client(),
                 reasoning_effort=llm.reasoning_effort,
             )
-        model = super().get_model(model_name)
-        if llm.disable_streaming:
-            return _NonStreamingModel(model)
-        return model
+        else:
+            model = super().get_model(model_name)
+            if llm.disable_streaming:
+                model = _NonStreamingModel(model)
+                # The wrapper emits its single event only once the whole request
+                # is done, so an idle gap is meaningless here; the request
+                # timeout bounds it instead.
+                idle_timeout = 0.0
+        return _TurnGuardModel(
+            model,
+            max_tool_calls_per_turn=llm.max_tool_calls_per_turn,
+            stream_idle_timeout=idle_timeout,
+        )
 
 
 DEFAULT_MODEL_RETRY = ModelRetrySettings(
