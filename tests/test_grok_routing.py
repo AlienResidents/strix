@@ -3,20 +3,14 @@
 from __future__ import annotations
 
 import argparse
-import importlib
 from unittest import mock
 
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 
 from strix.config import grok, subscription
-from strix.config.models import StrixProvider
-from strix.interface import utils
+from strix.config.models import StrixProvider, _TurnGuardModel
+from strix.interface import scan_setup, utils
 from strix.report import state as state_mod
-
-
-# ``strix.interface.__init__`` binds ``main`` to the entrypoint function, so
-# ``from strix.interface import main`` returns that function, not the module.
-main_mod = importlib.import_module("strix.interface.main")
 
 
 def test_grok_prefix_routes_to_chat_completions(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -25,9 +19,10 @@ def test_grok_prefix_routes_to_chat_completions(monkeypatch) -> None:  # type: i
 
     model = StrixProvider().get_model("grok/grok-4")
 
-    assert isinstance(model, OpenAIChatCompletionsModel)
+    assert isinstance(model, _TurnGuardModel)
+    assert isinstance(model._inner, OpenAIChatCompletionsModel)
     # The provider strips the grok/ prefix and passes xAI's bare model slug.
-    assert model.model == "grok-4"
+    assert model._inner.model == "grok-4"
 
 
 def test_non_subscription_model_is_not_hijacked_by_grok(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -40,7 +35,8 @@ def test_non_subscription_model_is_not_hijacked_by_grok(monkeypatch) -> None:  #
     # A metered xai/* key model must fall through to the normal provider path,
     # not the subscription route.
     model = StrixProvider().get_model("xai/grok-4")
-    assert not (isinstance(model, OpenAIChatCompletionsModel) and model.model == "grok-4")
+    assert isinstance(model, _TurnGuardModel)
+    assert not isinstance(model._inner, OpenAIChatCompletionsModel)
 
 
 def test_provider_label_names_the_subscription() -> None:
@@ -81,10 +77,12 @@ def test_subscription_label_prefers_persisted_provider(monkeypatch) -> None:  # 
 def test_persisted_run_record_carries_provider(tmp_path, monkeypatch) -> None:  # type: ignore[no-untyped-def]
     settings = mock.MagicMock()
     settings.llm.model = "grok/grok-4"
-    monkeypatch.setattr(main_mod, "load_settings", lambda: settings)
-    monkeypatch.setattr(main_mod, "run_dir_for", lambda _name: tmp_path)
+    monkeypatch.setattr(scan_setup, "load_settings", lambda: settings)
+    monkeypatch.setattr(scan_setup, "run_dir_for", lambda _name: tmp_path)
     captured: dict[str, object] = {}
-    monkeypatch.setattr(main_mod, "write_run_record", lambda _dir, rec: captured.update(rec))
+    monkeypatch.setattr(
+        "strix.report.writer.write_run_record", lambda _dir, rec: captured.update(rec)
+    )
 
     args = argparse.Namespace(
         run_name="run-test",
@@ -97,7 +95,7 @@ def test_persisted_run_record_carries_provider(tmp_path, monkeypatch) -> None:  
         scope_mode="mode",
         diff_base=None,
     )
-    main_mod._persist_run_record(args)
+    scan_setup._persist_run_record(args)
 
     # The resume/viewer record must carry the provider so resumed runs stay labeled.
     assert captured["auth_mode"] == "subscription"
