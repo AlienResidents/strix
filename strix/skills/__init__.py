@@ -194,7 +194,8 @@ def _consume_frontmatter_continuation(
     while index < len(lines):
         line = lines[index]
         if not line.strip():
-            break
+            index += 1
+            continue
         indent = len(line) - len(line.lstrip())
         if indent <= base_indent:
             break

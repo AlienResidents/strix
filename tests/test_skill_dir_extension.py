@@ -117,19 +117,20 @@ def test_available_skill_normalizes_multiline_descriptions(tmp_path: Path) -> No
         tmp_path,
         "extra",
         "block",
-        "---\nname: block\ndescription: |\n  First line\n  Second line\n---\nblock body",
+        "---\nname: block\n\ndescription: |\n"
+        "  First paragraph\n\n  Second paragraph\n\n---\nblock body",
     )
     _write_skill(
         tmp_path,
         "extra",
         "plain",
-        "---\nname: plain\ndescription: First line\n  Second line\n---\nplain body",
+        "---\nname: plain\n\ndescription: First line\n  Second line\n\n---\nplain body",
     )
     register_skill_dir(tmp_path)
 
     available = {skill["name"]: skill["description"] for skill in get_available_skills()["extra"]}
     assert available == {
-        "block": "First line Second line",
+        "block": "First paragraph Second paragraph",
         "plain": "First line Second line",
     }
 
