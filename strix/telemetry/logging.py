@@ -168,6 +168,17 @@ def attach_preflight_logging(*, debug: bool | None = None) -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
+def remove_preflight_logging() -> None:
+    """Detach any preflight stderr handler from the tracked logger roots."""
+    for name in _TRACKED_ROOTS:
+        tracked = logging.getLogger(name)
+        for handler in list(tracked.handlers):
+            if getattr(handler, _PREFLIGHT_HANDLER_TAG, False):
+                tracked.removeHandler(handler)
+                with contextlib.suppress(Exception):
+                    handler.close()
+
+
 def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[[], None]:
     """Attach scan-scoped handlers; return a teardown callable.
 
@@ -185,6 +196,7 @@ def setup_scan_logging(run_dir: Path, *, debug: bool | None = None) -> Callable[
         time. Safe to call from a ``finally`` block.
     """
     configure_dependency_logging()
+    remove_preflight_logging()
 
     debug = debug_logging_enabled(debug=debug)
 

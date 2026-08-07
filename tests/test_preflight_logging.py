@@ -11,20 +11,26 @@ from strix.interface.main import (
     _format_connection_error_detail,
 )
 from strix.telemetry import logging as tlog
-from strix.telemetry.logging import attach_preflight_logging, debug_logging_enabled
+from strix.telemetry.logging import (
+    attach_preflight_logging,
+    debug_logging_enabled,
+    remove_preflight_logging,
+    setup_scan_logging,
+)
 
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
 
-def _remove_preflight_handlers() -> None:
-    for tracked_name in ("strix", "openai.agents"):
-        tracked = logging.getLogger(tracked_name)
-        for handler in list(tracked.handlers):
-            if getattr(handler, tlog._PREFLIGHT_HANDLER_TAG, False):
-                tracked.removeHandler(handler)
-                handler.close()
+def _preflight_handlers(name: str) -> list[logging.Handler]:
+    return [
+        handler
+        for handler in logging.getLogger(name).handlers
+        if getattr(handler, tlog._PREFLIGHT_HANDLER_TAG, False)
+    ]
 
 
 def test_exception_messages_walks_cause_chain_to_ssl_error() -> None:
@@ -77,4 +83,20 @@ def test_attach_preflight_logging_emits_debug_to_stderr(
         captured = capsys.readouterr()
         assert "LLM warm-up failed" in captured.err
     finally:
-        _remove_preflight_handlers()
+        remove_preflight_logging()
+
+
+def test_setup_scan_logging_removes_preflight_handler(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.delenv("STRIX_DEBUG", raising=False)
+    attach_preflight_logging()
+    assert _preflight_handlers("strix")
+
+    teardown = setup_scan_logging(tmp_path)
+    try:
+        for name in ("strix", "openai.agents"):
+            assert not _preflight_handlers(name)
+    finally:
+        teardown()
