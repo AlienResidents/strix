@@ -58,13 +58,17 @@ agent-browser screenshot
 The browser stays running across commands so these feel like a single
 session. Use `agent-browser close` (or `close --all`) when you're done.
 
-The default session is **shared with every other agent in the sandbox**, and each
-extra `--session <name>` is a whole extra Chromium (~340 MB) on a box you share —
-so open one only when you need isolated cookies, and close it when you're done.
-A browser left idle for 3 minutes is reclaimed automatically; the next command
-relaunches it, but the page, tabs, refs and cookies are gone. If you're
-authenticated and about to go do something else for a while, save the state
-first (see [Persist session across runs](#persist-session-across-runs)).
+The default session is **shared with every other agent in the sandbox** — if
+another agent navigates it, your page and your refs are gone from under you. Use
+`--session <your-agent-name>` for your own browser work so nobody else can move
+it. Each session is a separate Chromium (~340 MB) on a shared box, so keep one
+rather than several, and close it when you're finished with the target.
+
+A browser left idle for 3 minutes is reclaimed automatically to free memory for
+the other agents; the next command relaunches it, but the page, tabs, refs and
+cookies are gone. If you're authenticated and about to go do something else for a
+while, save the state first (see
+[Persist session across runs](#persist-session-across-runs)).
 
 ## Reading a page
 
@@ -315,9 +319,10 @@ agent-browser --session b fill @e1 "bob@test.com"
 `AGENT_BROWSER_SESSION=myapp` sets the default session for the current
 shell.
 
-Every session is a separate Chromium, so this is the most expensive thing you can
-do to the shared sandbox — use it for genuine isolation (two users, two cookie
-jars), not as a habit, and close each one when the flow is finished:
+Use a session named after yourself for your own work — that's what keeps a
+concurrent agent from navigating the page out from under you. Every session is a
+separate Chromium though, so hold one at a time rather than a collection, and
+close each one when its flow is finished:
 
 ```bash
 agent-browser --session a close
