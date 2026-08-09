@@ -59,10 +59,18 @@ The browser stays running across commands so these feel like a single
 session. Use `agent-browser close` (or `close --all`) when you're done.
 
 The default session is **shared with every other agent in the sandbox** — if
-another agent navigates it, your page and your refs are gone from under you. Use
-`--session <your-agent-name>` for your own browser work so nobody else can move
-it. Each session is a separate Chromium (~340 MB) on a shared box, so keep one
-rather than several, and close it when you're finished with the target.
+another agent navigates it, your page and your refs are gone from under you. So
+claim your own by passing `--session <your-agent-name>` on **every** command:
+
+```bash
+agent-browser --session recon-3 open https://example.com
+agent-browser --session recon-3 snapshot -i
+agent-browser --session recon-3 close        # when done with the target
+```
+
+The examples in the rest of this skill omit `--session` to keep them readable;
+keep passing yours. Each session is a separate Chromium (~340 MB) on a shared
+box, so hold one rather than several, and close it when you're finished.
 
 A browser left idle for 3 minutes is reclaimed automatically to free memory for
 the other agents; the next command relaunches it, but the page, tabs, refs and

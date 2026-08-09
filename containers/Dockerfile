@@ -117,16 +117,7 @@ ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
 ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US"
 ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
-# Reclaim abandoned browsers. Each `--session` name is a separate daemon owning its
-# own Chromium process group — measured at ~340 MB and ~12 processes with one page
-# open — and nothing in the engine owns a browser's lifecycle: agents drive
-# `agent-browser` through exec_command, so an agent that finishes, is stopped, or
-# crashes leaves its browser resident for the life of the sandbox. Upstream
-# disables the idle timeout by default, which turns a wide fan-out into gigabytes
-# of stranded Chromium. The daemon relaunches transparently on the next command, so
-# the only cost of reclamation is losing browser state (see the skill's note on
-# persisting it). Three minutes is longer than the gap between two browser commands
-# in an active agent turn; override the env var to tune.
+# Nothing owns a browser's lifecycle, so reclaim idle ones (~340 MB each).
 ENV AGENT_BROWSER_IDLE_TIMEOUT_MS=180000
 RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 
