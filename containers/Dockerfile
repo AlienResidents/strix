@@ -140,6 +140,7 @@ RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 # a leftover makes the runtime Xvfb refuse to start ("Server is already active").
 RUN set -eu; \
     Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb-build.log 2>&1 & \
+    xvfb_pid=$!; \
     for _ in $(seq 1 20); do xdpyinfo -display :99 >/dev/null 2>&1 && break; sleep 0.5; done; \
     xdpyinfo -display :99 >/dev/null; \
     DISPLAY=:99 agent-browser --headed --args "${AGENT_BROWSER_ARGS},--no-sandbox" \
@@ -149,7 +150,8 @@ RUN set -eu; \
     fi; \
     DISPLAY=:99 xwininfo -root -children | grep -qi chromium; \
     agent-browser close >/dev/null 2>&1 || true; \
-    pkill -f 'Xvfb :99' || true; \
+    kill "${xvfb_pid}" 2>/dev/null || true; \
+    wait "${xvfb_pid}" 2>/dev/null || true; \
     rm -rf /tmp/.X99-lock /tmp/.X11-unix/X99 /tmp/xvfb-build.log /tmp/headed-check.log
 
 RUN set -eux; \
