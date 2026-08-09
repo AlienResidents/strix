@@ -148,14 +148,8 @@ if [ ! -S /run/dbus/system_bus_socket ]; then
   sudo dbus-daemon --system --fork > /tmp/dbus.log 2>&1 || true
 fi
 
-# A UA that disagrees with the installed browser's client hints is a trivially
-# detectable automation signal, so derive it instead of hardcoding a version.
-CHROME_MAJOR="$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
-BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR:-131}.0.0.0 Safari/537.36"
-
 cat << EOF | sudo tee /etc/profile.d/browser.sh
 export DISPLAY=:${DISPLAY_NUM}
-export AGENT_BROWSER_USER_AGENT="${BROWSER_UA}"
 EOF
 
 echo ". /etc/profile.d/browser.sh" >> ~/.bashrc

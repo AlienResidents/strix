@@ -116,9 +116,10 @@ RUN npm install -g retire@latest && \
     ln -sf ast-grep /home/pentester/.npm-global/lib/node_modules/@ast-grep/cli/sg
 
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
-# The User-Agent is derived from the installed Chromium at container start; see
-# containers/docker-entrypoint.sh. AGENT_BROWSER_ARGS is comma-separated, so no
-# flag value may contain a comma (window geometry comes from the display instead).
+# Must match the installed Chromium major; the build asserts it below.
+ENV AGENT_BROWSER_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36"
+# AGENT_BROWSER_ARGS is comma-separated, so no flag value may contain a comma
+# (window geometry comes from the virtual display instead).
 ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US,--password-store=basic,--use-mock-keychain,--disable-dev-shm-usage"
 ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
 ENV AGENT_BROWSER_IDLE_TIMEOUT_MS=180000
@@ -128,6 +129,10 @@ RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 # headed mode here. `--no-sandbox` is build-only: buildkit has no unprivileged
 # user namespaces. The stale X lock/socket must go or the runtime Xvfb refuses.
 RUN set -eu; \
+    chrome_major="$(chromium --version | grep -oE '[0-9]+' | head -1)"; \
+    printf '%s' "${AGENT_BROWSER_USER_AGENT}" | grep -q "Chrome/${chrome_major}\." || { \
+        echo "AGENT_BROWSER_USER_AGENT disagrees with installed Chromium ${chrome_major}"; exit 1; \
+    }; \
     Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb-build.log 2>&1 & \
     xvfb_pid=$!; \
     for _ in $(seq 1 20); do xdpyinfo -display :99 >/dev/null 2>&1 && break; sleep 0.5; done; \
