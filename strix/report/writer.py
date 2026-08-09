@@ -118,12 +118,6 @@ def write_executive_report(
     final_scan_result: str,
     coverage_markdown: str | None = None,
 ) -> None:
-    """Write the client-facing report, optionally with a coverage appendix.
-
-    ``coverage_markdown`` is rendered from the coverage ledger rather than
-    authored by an agent, so what the report claims was examined stays tied to
-    what was actually recorded.
-    """
     path = run_dir / "penetration_test_report.md"
     sections = [
         "# Security Penetration Test Report\n",
