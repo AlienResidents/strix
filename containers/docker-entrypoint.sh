@@ -117,6 +117,56 @@ echo ". /etc/profile.d/proxy.sh" >> ~/.zshrc
 
 echo "✅ System-wide proxy configuration complete"
 
+# Bot protection routinely rejects headless browsers, so the agent needs to be
+# able to fall back to a real headed Chrome. There is no physical display here,
+# so provide a virtual one; without it headed mode dies with "Missing X server or
+# $DISPLAY" while still exiting 0, which is silent from the agent's point of view.
+DISPLAY_NUM="${STRIX_DISPLAY_NUM:-99}"
+DISPLAY_GEOMETRY="${STRIX_DISPLAY_GEOMETRY:-1280x800x24}"
+
+if ! xdpyinfo -display ":${DISPLAY_NUM}" >/dev/null 2>&1; then
+  # No server is answering, so any lock/socket left over from an earlier boot (or
+  # from image build) is stale — Xvfb otherwise refuses with "Server is already
+  # active for display N".
+  rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}" 2>/dev/null || true
+  Xvfb ":${DISPLAY_NUM}" -screen 0 "${DISPLAY_GEOMETRY}" -nolisten tcp \
+    > /tmp/xvfb.log 2>&1 &
+  for _ in $(seq 1 20); do
+    xdpyinfo -display ":${DISPLAY_NUM}" >/dev/null 2>&1 && break
+    sleep 0.5
+  done
+fi
+
+if xdpyinfo -display ":${DISPLAY_NUM}" >/dev/null 2>&1; then
+  echo "✅ Virtual display :${DISPLAY_NUM} ready (${DISPLAY_GEOMETRY})"
+else
+  echo "⚠️  Xvfb failed to start; headed browsing is unavailable. Xvfb log:"
+  cat /tmp/xvfb.log 2>/dev/null || echo "(no log available)"
+fi
+
+# A session bus keeps headed Chrome from spewing dbus connection errors that look
+# like fatal failures in tool output. Best-effort: Chrome runs fine without it.
+if [ ! -S /run/dbus/system_bus_socket ]; then
+  sudo mkdir -p /run/dbus
+  sudo dbus-daemon --system --fork > /tmp/dbus.log 2>&1 || true
+fi
+
+# Keep the advertised Chrome version in step with the browser actually installed:
+# a User-Agent that disagrees with the client hints and JS fingerprint is a
+# trivially detectable automation signal.
+CHROME_MAJOR="$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
+BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR:-131}.0.0.0 Safari/537.36"
+
+cat << EOF | sudo tee /etc/profile.d/browser.sh
+export DISPLAY=:${DISPLAY_NUM}
+export AGENT_BROWSER_USER_AGENT="${BROWSER_UA}"
+EOF
+
+echo ". /etc/profile.d/browser.sh" >> ~/.bashrc
+echo ". /etc/profile.d/browser.sh" >> ~/.zshrc
+
+. /etc/profile.d/browser.sh
+
 echo "Adding CA to browser trust store..."
 sudo -u pentester mkdir -p /home/pentester/.pki/nssdb
 sudo -u pentester certutil -N -d sql:/home/pentester/.pki/nssdb --empty-password
