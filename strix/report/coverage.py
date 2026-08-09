@@ -18,7 +18,7 @@ in, and they are kept apart on purpose:
 
 A coverage claim is an attestation, so conflating the two would be the worst
 possible failure: a hallucinated "tested and clean" is strictly less honest
-than no coverage section at all. Every entry therefore carries its ``source``,
+than no coverage record at all. Every entry therefore carries its ``source``,
 and machine-observed facts contradict rather than confirm — an agent that
 carried the ``sql_injection`` skill and recorded nothing about SQL injection
 shows up under ``gaps``, and a run that hit its budget ceiling is stamped
@@ -420,74 +420,3 @@ def write_coverage(run_dir: Path, document: dict[str, Any]) -> Path:
         len(document.get("gaps", [])),
     )
     return path
-
-
-def render_coverage_markdown(document: dict[str, Any]) -> str:
-    """Render the coverage appendix appended to the executive report.
-
-    Built from the document rather than written by an agent, so the table in
-    the client-facing report cannot drift from the ledger it summarizes.
-    """
-    summary = document.get("summary", {})
-    completeness = document.get("completeness", {})
-    entries = document.get("entries", [])
-    gaps = document.get("gaps", [])
-
-    lines = [
-        "# Coverage",
-        "",
-        "Surfaces assessed during this engagement and how each was closed. Entries are "
-        "reported by the testing agents; the completeness notes below are recorded by "
-        "the runtime.",
-        "",
-        f"**Surfaces reviewed:** {summary.get('surfaces_reviewed', 0)}  ",
-        f"**Findings filed:** {summary.get('findings_filed', 0)}  ",
-        f"**Open items and gaps:** {summary.get('gaps', 0)}",
-        "",
-    ]
-
-    if entries:
-        lines += [
-            "| Surface | Risk Area | Outcome | Evidence |",
-            "| --- | --- | --- | --- |",
-        ]
-        lines += [
-            "| {} | {} | {} | {} |".format(
-                _cell(entry.get("surface")),
-                _cell(entry.get("risk_area")),
-                _cell(entry.get("outcome_label") or entry.get("outcome")),
-                _cell(entry.get("evidence")),
-            )
-            for entry in entries
-        ]
-        lines.append("")
-    else:
-        lines += [
-            "No surfaces were recorded for this scan. The absence of findings below "
-            "cannot be read as evidence that any particular area was tested.",
-            "",
-        ]
-
-    if gaps:
-        lines += ["## Not Covered", ""]
-        lines += [f"- {_inline(gap.get('detail'))}" for gap in gaps]
-        lines.append("")
-
-    caveats = completeness.get("caveats") or []
-    if caveats:
-        lines += ["## Completeness", ""]
-        lines += [f"- {_inline(caveat)}" for caveat in caveats]
-        lines.append("")
-
-    return "\n".join(lines)
-
-
-def _cell(value: Any) -> str:
-    """Flatten *value* for a markdown table cell."""
-    text = _inline(value)
-    return text.replace("|", "\\|") if text else "—"
-
-
-def _inline(value: Any) -> str:
-    """Collapse *value* to a single line of plain text."""
-    return " ".join(str(value or "").split())

@@ -229,13 +229,7 @@ async def finish_scan(
         - ``methodology`` — frameworks followed (OWASP WSTG, PTES,
           OSSTMM, NIST), engagement type (black/gray/white box), scope
           and constraints, categories of testing performed. **No**
-          internal execution detail. Do **not** hand-write a table of
-          reviewed surfaces here: the report gains a ``Coverage``
-          section rendered directly from the coverage ledger, and a
-          transcribed copy would only drift from it. Describe the
-          approach and the classes of testing, and reconcile the ledger
-          via ``list_coverage`` (step 5) so that rendered section is
-          complete and honest.
+          internal execution detail.
         - ``technical_analysis`` — consolidated findings overview with
           severity model and systemic root causes. Reference individual
           vuln reports for repro steps; don't duplicate raw evidence.

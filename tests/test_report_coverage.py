@@ -9,7 +9,6 @@ from strix.report.coverage import (
     _SKILL_PHRASINGS,
     build_coverage_document,
     read_agent_graph,
-    render_coverage_markdown,
     write_coverage,
 )
 from strix.skills import get_available_skills
@@ -169,27 +168,6 @@ def test_write_coverage_emits_a_top_level_artifact(tmp_path: Path) -> None:
 
     assert path == tmp_path / "coverage.json"
     assert json.loads(path.read_text(encoding="utf-8"))["schema_version"] == 1
-
-
-def test_markdown_renders_a_surface_table() -> None:
-    markdown = render_coverage_markdown(_document())
-
-    assert "# Coverage" in markdown
-    assert "| POST /api/orders/{id} | object-level authorization | No issue identified |" in (
-        markdown
-    )
-
-
-def test_markdown_says_so_when_nothing_was_recorded() -> None:
-    markdown = render_coverage_markdown(_document(entries=[], agent_graph={}))
-
-    assert "cannot be read as evidence" in markdown
-
-
-def test_markdown_cell_escapes_pipes() -> None:
-    markdown = render_coverage_markdown(_document(entries=[_entry(surface="a|b")]))
-
-    assert "| a\\|b |" in markdown
 
 
 def test_read_agent_graph_tolerates_a_missing_or_corrupt_snapshot(tmp_path: Path) -> None:

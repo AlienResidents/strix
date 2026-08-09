@@ -45,17 +45,6 @@ def test_coverage_is_written_beside_the_other_artifacts(state: ReportState) -> N
     assert document["summary"]["surfaces_reviewed"] == 1
 
 
-def test_report_carries_a_coverage_section_from_the_ledger(state: ReportState) -> None:
-    _record_a_cleared_surface()
-    state.final_scan_result = "Scan complete."
-
-    state._save_artifacts()
-
-    report = (state.get_run_dir() / "penetration_test_report.md").read_text(encoding="utf-8")
-    assert "# Coverage" in report
-    assert "POST /api/orders/{id}" in report
-
-
 def test_cleared_surfaces_reach_sarif(state: ReportState) -> None:
     _record_a_cleared_surface()
 

@@ -14,7 +14,7 @@ from agents.usage import Usage
 from strix.config import codex
 from strix.config.loader import load_settings
 from strix.core.paths import run_dir_for, runtime_state_dir
-from strix.report.coverage import render_coverage_markdown, write_coverage
+from strix.report.coverage import write_coverage
 from strix.report.sarif import write_sarif
 from strix.report.usage import LLMUsageLedger
 from strix.report.writer import (
@@ -469,11 +469,7 @@ class ReportState:
                     logger.exception("coverage.json write failed (non-fatal)")
 
             if self.final_scan_result:
-                write_executive_report(
-                    run_dir,
-                    self.final_scan_result,
-                    render_coverage_markdown(coverage) if coverage else None,
-                )
+                write_executive_report(run_dir, self.final_scan_result)
 
             if self.vulnerability_reports:
                 write_vulnerabilities(run_dir, self.vulnerability_reports, self._saved_vuln_ids)

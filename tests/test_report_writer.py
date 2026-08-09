@@ -206,11 +206,3 @@ def test_render_vulnerability_md_surfaces_calibration_metadata() -> None:
     assert "## Confidence Rationale" in md
     assert "## What Would Change This Severity" in md
     assert "## Fix Verification" in md
-
-
-def test_write_executive_report_appends_the_coverage_section(tmp_path: Path) -> None:
-    write_executive_report(tmp_path, "Scan complete.", "# Coverage\n\nNothing tested.\n")
-    content = (tmp_path / "penetration_test_report.md").read_text(encoding="utf-8")
-
-    assert content.index("Scan complete.") < content.index("# Coverage")
-    assert "Nothing tested." in content
