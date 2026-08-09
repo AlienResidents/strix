@@ -150,7 +150,8 @@ def _skill_leaf(skill: str) -> str:
 def _risk_skill_names() -> frozenset[str]:
     """Bare names of every skill that denotes a vulnerability class."""
     try:
-        return frozenset(get_available_skills().get(_RISK_SKILL_CATEGORY, ()))
+        entries = get_available_skills().get(_RISK_SKILL_CATEGORY, [])
+        return frozenset(entry["name"] for entry in entries if entry.get("name"))
     except OSError:
         logger.warning("could not enumerate skills for coverage gaps", exc_info=True)
         return frozenset()

@@ -219,16 +219,20 @@ def test_multi_token_skill_matches_how_a_pentester_writes_it() -> None:
     assert not [gap for gap in doc["gaps"] if gap["kind"] == "unrecorded_risk_class"]
 
 
+def _vulnerability_skill_names() -> set[str]:
+    return {skill["name"] for skill in get_available_skills()["vulnerabilities"]}
+
+
 def test_every_vulnerability_skill_declares_its_phrasings() -> None:
     """A new skill without phrasings would be matched by its filename alone,
     which is how the false gap above got published."""
-    missing = set(get_available_skills()["vulnerabilities"]) - set(_SKILL_PHRASINGS)
+    missing = _vulnerability_skill_names() - set(_SKILL_PHRASINGS)
 
     assert not missing, f"add ledger phrasings for: {sorted(missing)}"
 
 
 def test_declared_phrasings_name_real_skills() -> None:
-    stale = set(_SKILL_PHRASINGS) - set(get_available_skills()["vulnerabilities"])
+    stale = set(_SKILL_PHRASINGS) - _vulnerability_skill_names()
 
     assert not stale, f"phrasings for skills that no longer exist: {sorted(stale)}"
 
