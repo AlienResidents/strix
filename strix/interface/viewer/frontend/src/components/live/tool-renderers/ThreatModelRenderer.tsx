@@ -82,10 +82,14 @@ export default function ThreatModelRenderer({ toolName, args, result }: ToolRend
             </span>
             <span className="text-[#555] text-xs"> — later statements win</span>
             <div className="mt-1 space-y-1">
+              {/* On a public share link the amendment body is stripped, so the
+                  author line has to stand on its own. */}
               {amendments.map((amendment, i) => (
                 <div key={i} className="text-xs leading-snug">
-                  <span className="text-[#666]">{amendment.agent_name ?? "unknown agent"}: </span>
-                  <span className="text-[#999]">{amendment.content ?? ""}</span>
+                  <span className="text-[#666]">{amendment.agent_name ?? "unknown agent"}</span>
+                  {amendment.content && (
+                    <span className="text-[#999]">: {amendment.content}</span>
+                  )}
                 </div>
               ))}
             </div>
