@@ -117,17 +117,14 @@ echo ". /etc/profile.d/proxy.sh" >> ~/.zshrc
 
 echo "✅ System-wide proxy configuration complete"
 
-# Bot protection routinely rejects headless browsers, so the agent needs to be
-# able to fall back to a real headed Chrome. There is no physical display here,
-# so provide a virtual one; without it headed mode dies with "Missing X server or
-# $DISPLAY" while still exiting 0, which is silent from the agent's point of view.
+# A virtual display so the agent can fall back to headed Chrome when a target
+# rejects headless; without it headed mode dies but still exits 0.
 DISPLAY_NUM="${STRIX_DISPLAY_NUM:-99}"
 DISPLAY_GEOMETRY="${STRIX_DISPLAY_GEOMETRY:-1280x800x24}"
 
 if ! xdpyinfo -display ":${DISPLAY_NUM}" >/dev/null 2>&1; then
-  # No server is answering, so any lock/socket left over from an earlier boot (or
-  # from image build) is stale — Xvfb otherwise refuses with "Server is already
-  # active for display N".
+  # Nothing is answering, so a leftover lock/socket is stale; Xvfb refuses to
+  # start with one present.
   rm -f "/tmp/.X${DISPLAY_NUM}-lock" "/tmp/.X11-unix/X${DISPLAY_NUM}" 2>/dev/null || true
   Xvfb ":${DISPLAY_NUM}" -screen 0 "${DISPLAY_GEOMETRY}" -nolisten tcp \
     > /tmp/xvfb.log 2>&1 &
@@ -144,16 +141,15 @@ else
   cat /tmp/xvfb.log 2>/dev/null || echo "(no log available)"
 fi
 
-# A session bus keeps headed Chrome from spewing dbus connection errors that look
-# like fatal failures in tool output. Best-effort: Chrome runs fine without it.
+# Best-effort session bus: without it headed Chrome spews dbus errors that read
+# like fatal failures in tool output.
 if [ ! -S /run/dbus/system_bus_socket ]; then
   sudo mkdir -p /run/dbus
   sudo dbus-daemon --system --fork > /tmp/dbus.log 2>&1 || true
 fi
 
-# Keep the advertised Chrome version in step with the browser actually installed:
-# a User-Agent that disagrees with the client hints and JS fingerprint is a
-# trivially detectable automation signal.
+# A UA that disagrees with the installed browser's client hints is a trivially
+# detectable automation signal, so derive it instead of hardcoding a version.
 CHROME_MAJOR="$(chromium --version 2>/dev/null | grep -oE '[0-9]+' | head -1)"
 BROWSER_UA="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${CHROME_MAJOR:-131}.0.0.0 Safari/537.36"
 

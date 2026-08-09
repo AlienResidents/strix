@@ -116,28 +116,17 @@ RUN npm install -g retire@latest && \
     ln -sf ast-grep /home/pentester/.npm-global/lib/node_modules/@ast-grep/cli/sg
 
 ENV AGENT_BROWSER_EXECUTABLE_PATH=/usr/bin/chromium
-# The User-Agent is derived from the installed Chromium at container start
-# (containers/docker-entrypoint.sh): a hardcoded version silently drifts from the
-# real browser as the image is rebuilt, and a UA that disagrees with the client
-# hints and JS fingerprint is exactly what bot protection looks for.
-# NOTE: AGENT_BROWSER_ARGS is comma-separated, so no flag value may contain a
-# comma — `--window-size=1280,800` would split into a bogus `800` argument that
-# Chrome treats as a second URL ("Multiple targets are not supported"). The window
-# geometry comes from the virtual display instead.
+# The User-Agent is derived from the installed Chromium at container start; see
+# containers/docker-entrypoint.sh. AGENT_BROWSER_ARGS is comma-separated, so no
+# flag value may contain a comma (window geometry comes from the display instead).
 ENV AGENT_BROWSER_ARGS="--disable-blink-features=AutomationControlled,--no-first-run,--no-default-browser-check,--lang=en-US,--password-store=basic,--use-mock-keychain,--disable-dev-shm-usage"
 ENV AGENT_BROWSER_SCREENSHOT_DIR=/workspace/.agent-browser-screenshots
 ENV AGENT_BROWSER_IDLE_TIMEOUT_MS=180000
 RUN /home/pentester/.npm-global/bin/agent-browser doctor --offline --quick
 
-# `agent-browser --headed` exits 0 even when Chrome fails to launch, so a broken
-# headed mode is invisible at runtime — assert it here instead. Targets are
-# increasingly gated behind bot protection that rejects headless browsers, which
-# makes headed mode part of the login path, not a debugging nicety.
-#
-# `--no-sandbox` is for this build step only: buildkit runs without unprivileged
-# user namespaces, so Chromium's zygote sandbox can't initialize here. It is not
-# part of the runtime browser args. The X lock and socket are removed afterwards;
-# a leftover makes the runtime Xvfb refuse to start ("Server is already active").
+# `agent-browser --headed` exits 0 even when Chrome fails to launch, so assert
+# headed mode here. `--no-sandbox` is build-only: buildkit has no unprivileged
+# user namespaces. The stale X lock/socket must go or the runtime Xvfb refuses.
 RUN set -eu; \
     Xvfb :99 -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb-build.log 2>&1 & \
     xvfb_pid=$!; \
