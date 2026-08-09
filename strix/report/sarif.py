@@ -40,15 +40,10 @@ Design notes:
   * Findings without safe locations still appear in the SARIF output,
     anchored to SECURITY.md and flagged via
     ``properties.synthetic_location`` rather than being dropped silently.
-  * Coverage — what was examined and cleared — rides in the same document
-    as non-failing results (``kind`` of ``pass`` / ``notApplicable`` /
-    ``open``, which SARIF defines precisely for "the rule ran and did not
-    fire"). Consumers that only want alerts filter on ``kind == "fail"``
-    and are unaffected; consumers that need to distinguish "tested and
-    clean" from "never tested" now can.
-  * Whether the run itself completed is recorded on ``run.invocations``:
-    ``executionSuccessful`` plus a ``toolExecutionNotifications`` entry per
-    completeness caveat. A truncated run must not read as a clean one.
+  * Coverage rides in the same document as non-failing results (``kind`` of
+    ``pass`` / ``notApplicable`` / ``open``), and run completeness on
+    ``run.invocations``. Consumers that only want alerts filter on
+    ``kind == "fail"`` and are unaffected.
 """
 
 from __future__ import annotations
@@ -220,10 +215,9 @@ def build_sarif_report(
     (DAST) targets that have no repository.
 
     ``coverage`` (optional) is the document from
-    :func:`strix.report.coverage.build_coverage_document`. Its cleared
+    :func:`strix.report.coverage.build_coverage_document`: its cleared
     surfaces become non-failing results and its completeness caveats become
-    invocation notifications, so a consumer can tell an untested area from a
-    tested-and-clean one without reading a second artifact.
+    invocation notifications.
 
     Findings without safe source locations are anchored synthetically
     to SECURITY.md and flagged via ``properties.synthetic_location``.
@@ -552,9 +546,6 @@ def _result_properties(
         "impact",
         "technical_analysis",
         "remediation_steps",
-        # Calibration metadata. A downstream triager deciding whether to act
-        # on an alert needs the case against it and how firm the call is, not
-        # just the case for it.
         "counterevidence",
         "confidence",
         "confidence_rationale",
@@ -653,12 +644,8 @@ def _build_fixes(report: dict[str, Any]) -> list[dict[str, Any]] | None:
 
 _COVERAGE_RULE_PREFIX = "strix-coverage"
 
-# SARIF's ``result.kind`` already models every closure state the coverage
-# ledger tracks, so no bespoke vocabulary is needed: ``pass`` is "checked and
-# it holds", ``notApplicable`` is "the rule does not apply to this artifact",
-# ``open`` is "a reviewer still has to decide". ``reported`` is absent on
-# purpose — those surfaces are already in ``results`` as real ``fail``
-# findings, and emitting them twice would double-count them.
+# ``reported`` is absent on purpose: those surfaces are already in ``results``
+# as ``fail`` findings.
 _OUTCOME_TO_KIND = {
     "no_issue_found": "pass",
     "ruled_out": "pass",
@@ -673,15 +660,12 @@ def _coverage_rule_id(risk_area: str) -> str:
 
 
 def _build_coverage_rule(rule_id: str, risk_area: str) -> dict[str, Any]:
-    """A rule descriptor for a risk area that was assessed but did not fire."""
     description = f"Coverage of {risk_area} across the assessed attack surface."
     return {
         "id": rule_id,
         "name": _rule_name(rule_id, risk_area),
         "shortDescription": {"text": f"Coverage: {risk_area}"},
         "fullDescription": {"text": description},
-        # Coverage results never raise an alert; the level lives on the
-        # result as ``none`` and the rule's default has to agree.
         "defaultConfiguration": {"level": "none"},
         "help": {"text": description, "markdown": description},
         "properties": {"tags": ["coverage"]},
@@ -694,7 +678,6 @@ def _build_coverage_result(
     kind: str,
     entry: dict[str, Any],
 ) -> dict[str, Any]:
-    """One non-failing result recording that a surface was assessed."""
     surface = _string_value(entry.get("surface")) or "unspecified surface"
     risk_area = _string_value(entry.get("risk_area")) or "unspecified risk"
     evidence = _string_value(entry.get("evidence"))
@@ -708,8 +691,7 @@ def _build_coverage_result(
         "ruleId": rule_id,
         "ruleIndex": rule_index,
         "kind": kind,
-        # SARIF requires ``level: none`` for any result whose kind is not
-        # ``fail``; anything else makes the document invalid.
+        # SARIF requires ``level: none`` for any result whose kind is not ``fail``.
         "level": "none",
         "message": {"text": message},
         "locations": [{"logicalLocations": [{"fullyQualifiedName": surface}]}],
@@ -732,7 +714,6 @@ def _append_coverage(
     rule_index_by_id: dict[str, int],
     results: list[dict[str, Any]],
 ) -> None:
-    """Add the coverage ledger's cleared surfaces to an in-progress run."""
     entries = coverage.get("entries")
     if not isinstance(entries, list):
         return
@@ -752,12 +733,7 @@ def _append_coverage(
 
 
 def _coverage_invocation(coverage: dict[str, Any]) -> dict[str, Any]:
-    """Record whether the run was complete enough for its results to be final.
-
-    ``executionSuccessful: false`` is the standard signal that a consumer must
-    not read "no results" as "nothing to find" — a scan cut short by its
-    budget produces a document that otherwise looks identical to a clean one.
-    """
+    """``executionSuccessful: false`` stops a truncated run reading as a clean one."""
     completeness = coverage.get("completeness")
     completeness = completeness if isinstance(completeness, dict) else {}
     caveats = completeness.get("caveats")
