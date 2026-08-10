@@ -7,7 +7,7 @@ from agents import RunContextWrapper, function_tool
 from strix.skills import load_skills, validate_requested_skills
 
 
-@function_tool(timeout=10)
+@function_tool(timeout=10, strict_mode=False)
 async def load_skill(ctx: RunContextWrapper, skills: list[str]) -> str:
     """Return the markdown body of one or more skills as reference material.
 

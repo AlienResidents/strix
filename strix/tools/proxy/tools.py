@@ -97,7 +97,7 @@ def _err(name: str, exc: Exception) -> str:
     )
 
 
-@function_tool(timeout=120)
+@function_tool(timeout=120, strict_mode=False)
 async def list_requests(
     ctx: RunContextWrapper,
     httpql_filter: str | None = None,
@@ -227,7 +227,7 @@ async def list_requests(
         return _err("list_requests", exc)
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def view_request(
     ctx: RunContextWrapper,
     request_id: str,
@@ -428,7 +428,7 @@ def _format_replay_tool_result(replay: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False, default=str)
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def list_sitemap(
     ctx: RunContextWrapper,
     scope_id: str | None = None,
@@ -480,7 +480,7 @@ async def list_sitemap(
         return _err("list_sitemap", exc)
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def view_sitemap_entry(
     ctx: RunContextWrapper,
     entry_id: str,
@@ -508,7 +508,7 @@ async def view_sitemap_entry(
         return _err("view_sitemap_entry", exc)
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def scope_rules(
     ctx: RunContextWrapper,
     action: ScopeAction,

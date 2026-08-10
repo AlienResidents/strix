@@ -7,7 +7,7 @@ import json
 from agents import function_tool
 
 
-@function_tool(timeout=10)
+@function_tool(timeout=10, strict_mode=False)
 async def think(thought: str) -> str:
     """Record a private chain-of-thought note. No side effects, no new info.
 

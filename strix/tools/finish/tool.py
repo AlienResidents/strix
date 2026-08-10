@@ -79,7 +79,7 @@ def _do_finish(
         }
 
 
-@function_tool(timeout=60)
+@function_tool(timeout=60, strict_mode=False)
 async def finish_scan(
     ctx: RunContextWrapper,
     executive_summary: str,

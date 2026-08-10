@@ -1357,7 +1357,7 @@ def _do_get_report(report_id: str, caller_agent_id: str | None = None) -> dict[s
     }
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def list_reports(
     ctx: RunContextWrapper,
     severity: str | None = None,
@@ -1422,7 +1422,7 @@ async def list_reports(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def get_report(ctx: RunContextWrapper, report_id: str) -> str:
     """Fetch one vulnerability report by its id (e.g. ``vuln-0001``).
 

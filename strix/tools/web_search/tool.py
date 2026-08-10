@@ -118,7 +118,7 @@ def _do_search(query: str) -> dict[str, Any]:  # noqa: PLR0911 - each error clas
         }
 
 
-@function_tool(timeout=330)
+@function_tool(timeout=330, strict_mode=False)
 async def web_search(ctx: RunContextWrapper, query: str) -> str:
     """Real-time web search via Perplexity — your primary research tool.
 

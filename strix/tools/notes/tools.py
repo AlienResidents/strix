@@ -336,7 +336,7 @@ def _delete_note_impl(note_id: str) -> dict[str, Any]:
             }
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def create_note(
     ctx: RunContextWrapper,
     title: str,
@@ -385,7 +385,7 @@ async def create_note(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def list_notes(
     ctx: RunContextWrapper,
     category: str | None = None,
@@ -429,7 +429,7 @@ async def list_notes(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Fetch one note by its 6-char ID. Returns the full content.
 
@@ -444,7 +444,7 @@ async def get_note(ctx: RunContextWrapper, note_id: str) -> str:
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def update_note(
     ctx: RunContextWrapper,
     note_id: str,
@@ -477,7 +477,7 @@ async def update_note(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def delete_note(ctx: RunContextWrapper, note_id: str) -> str:
     """Delete a note.
 

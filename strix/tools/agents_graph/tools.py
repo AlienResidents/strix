@@ -68,7 +68,7 @@ def _render_completion_report(
     return "\n".join(lines)
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def view_agent_graph(ctx: RunContextWrapper) -> str:
     """Print the multi-agent tree — every agent, its parent, its status.
 
@@ -120,7 +120,7 @@ async def view_agent_graph(ctx: RunContextWrapper) -> str:
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def send_message_to_agent(
     ctx: RunContextWrapper,
     target_agent_id: str,
@@ -228,7 +228,7 @@ _WAIT_HARD_CEILING_S = _WAIT_DEFAULT_TIMEOUT_S + 1
 _WAITED_TURN_KEY = "waited_llm_turn"
 
 
-@function_tool(timeout=_WAIT_HARD_CEILING_S)
+@function_tool(timeout=_WAIT_HARD_CEILING_S, strict_mode=False)
 async def wait_for_agents(  # noqa: PLR0911
     ctx: RunContextWrapper,
     reason: str = "Waiting for messages from other agents",
@@ -404,7 +404,7 @@ async def wait_for_agents(  # noqa: PLR0911
     )
 
 
-@function_tool(timeout=120)
+@function_tool(timeout=120, strict_mode=False)
 async def create_agent(
     ctx: RunContextWrapper,
     name: str,
@@ -515,7 +515,7 @@ async def create_agent(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def agent_finish(
     ctx: RunContextWrapper,
     result_summary: str,
@@ -636,7 +636,7 @@ async def agent_finish(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def stop_agent(
     ctx: RunContextWrapper,
     target_agent_id: str,

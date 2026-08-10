@@ -263,7 +263,7 @@ def _apply_single_update(
     return None
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
     """Create one or many todos for the current agent.
 
@@ -359,7 +359,7 @@ async def create_todo(ctx: RunContextWrapper, todos: str) -> str:
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def list_todos(
     ctx: RunContextWrapper,
     status: str | None = None,
@@ -424,7 +424,7 @@ async def list_todos(
     )
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def update_todo(ctx: RunContextWrapper, updates: str) -> str:
     """Update one or many todos.
 
@@ -534,7 +534,7 @@ def _mark(*, agent_id: str, todo_ids: str, new_status: str) -> str:
     return json.dumps(response, ensure_ascii=False, default=str)
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def mark_todo_done(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Mark one or many todos as done.
 
@@ -547,7 +547,7 @@ async def mark_todo_done(ctx: RunContextWrapper, todo_ids: str) -> str:
     return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="done")
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Reset one or many todos to pending (e.g., to retry a failed task).
 
@@ -560,7 +560,7 @@ async def mark_todo_pending(ctx: RunContextWrapper, todo_ids: str) -> str:
     return _mark(agent_id=_agent_id_from(ctx), todo_ids=todo_ids, new_status="pending")
 
 
-@function_tool(timeout=30)
+@function_tool(timeout=30, strict_mode=False)
 async def delete_todo(ctx: RunContextWrapper, todo_ids: str) -> str:
     """Delete one or many todos. Removes them entirely (no soft-delete).
 
