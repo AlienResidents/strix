@@ -278,6 +278,7 @@ async def run_strix_scan(
             max_budget_usd=max_budget_usd,
             max_turns=max_turns,
             interactive=interactive,
+            stall_turn_limit=settings.llm.stall_turn_limit,
         )
         if interactive:
             coordinator.set_budget_extender(hooks.extend_budget)

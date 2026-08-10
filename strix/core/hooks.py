@@ -21,12 +21,50 @@ logger = logging.getLogger(__name__)
 
 
 LLM_TURN_KEY = "llm_turn"
+STALL_TURN_KEY = "stall_turns"
 
 _STAGE_LABELS: tuple[str, ...] = ("NOTICE", "URGENT", "CRITICAL")
 _TURN_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
 _ROOT_BUDGET_WARN_BANDS: tuple[float, ...] = (0.70, 0.85, 0.95)
 _SUBAGENT_BUDGET_WARN_BANDS: tuple[float, ...] = (0.75, 0.80, 0.85)
 _SUBAGENT_BUDGET_RESERVE = 0.90
+_STALL_WARN_BANDS: tuple[float, ...] = (0.25, 0.50, 0.75)
+
+# Tools that produce no new external evidence: planning, bookkeeping, and
+# intra-graph chatter. A turn consisting solely of these is a stall turn.
+# Anything else -- shell, browser, proxy, web_search, reporting, spawning --
+# gathered new information or produced output and resets the counter. The set
+# is deliberately an allowlist of Strix's local bookkeeping tools: SDK-hosted
+# sandbox tools never reach the local tool path, so they can only be detected
+# by name from the model's function_call output items, and any name missing
+# here fails safe (counts as progress, never as a stall).
+_STALL_FREE_TOOLS: frozenset[str] = frozenset(
+    {
+        "think",
+        "create_note",
+        "list_notes",
+        "get_note",
+        "update_note",
+        "delete_note",
+        "create_todo",
+        "list_todos",
+        "update_todo",
+        "mark_todo_done",
+        "mark_todo_pending",
+        "delete_todo",
+        "view_agent_graph",
+        "send_message_to_agent",
+        "wait_for_agents",
+        "list_reports",
+        "get_report",
+        "respond_to_user",
+        "load_skill",
+    }
+)
+
+
+class AgentStallDetectedError(RuntimeError):
+    """Raised when a sub-agent loops without external progress (STOAITH fencing)."""
 
 
 class BudgetExceededError(RuntimeError):
@@ -121,6 +159,7 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         max_budget_usd: float | None = None,
         max_turns: int | None = None,
         interactive: bool = False,
+        stall_turn_limit: int = 80,
     ) -> None:
         if max_budget_usd is not None and (
             not math.isfinite(max_budget_usd) or max_budget_usd <= 0
@@ -128,11 +167,14 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             raise ValueError("max_budget_usd must be a finite number greater than 0")
         if max_turns is not None and max_turns <= 0:
             raise ValueError("max_turns must be a positive integer")
+        if stall_turn_limit < 0:
+            raise ValueError("stall_turn_limit must be >= 0 (0 disables stall fencing)")
         self._model = model
         self._max_budget_usd = max_budget_usd
         self._budget_increment = max_budget_usd
         self._max_turns = max_turns
         self._interactive = interactive
+        self._stall_turn_limit = stall_turn_limit
 
     def extend_budget(self) -> None:
         if self._max_budget_usd is None or self._budget_increment is None:
@@ -152,6 +194,60 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
             self._maybe_warn_budget(context, input_items)
         except Exception:
             logger.exception("budget/turn warning injection failed")
+        # Outside the suppressing try/except: the stall fence RAISES to kill a
+        # looping sub-agent, and that raise must propagate.
+        self._check_stall(context, agent, input_items)
+
+    def _check_stall(
+        self,
+        context: RunContextWrapper[dict[str, Any]],
+        agent: Agent[dict[str, Any]],
+        input_items: list[TResponseInputItem],
+    ) -> None:
+        """Warn on, then fence, agents that loop without external progress (STOAITH).
+
+        The counter increments once per LLM turn here and resets in on_llm_end
+        when the model's response requests any tool outside _STALL_FREE_TOOLS.
+        A sub-agent that ignores three escalating warnings is force-stopped by
+        raising, which marks only that agent failed; the scan continues. The
+        root agent is never fenced -- it legitimately waits on children, and
+        killing it kills the scan.
+        """
+        limit = self._stall_turn_limit
+        if limit <= 0:
+            return
+        ctx = context.context if isinstance(context.context, dict) else {}
+        stall = int(ctx.get(STALL_TURN_KEY, 0)) + 1
+        ctx[STALL_TURN_KEY] = stall
+        is_root = ctx.get("parent_id") is None
+        if stall >= limit:
+            if is_root:
+                return
+            agent_name = getattr(agent, "name", None) or ctx.get("agent_id") or "unknown"
+            logger.warning(
+                "STOAITH: fencing agent %s after %d consecutive turns with no external "
+                "action (stall limit %d)",
+                agent_name,
+                stall,
+                limit,
+            )
+            raise AgentStallDetectedError(
+                f"Agent fenced after {stall} consecutive turns with no external action "
+                f"(stall limit {limit}): it was repeating itself without probing, "
+                "reading, searching, or reporting."
+            )
+        stage = _crossed_stage(stall / limit, _STALL_WARN_BANDS)
+        if stage is None:
+            return
+        content = (
+            f"[{_urgency(stage)}] Stall detector: {stall}/{limit} consecutive turns with no "
+            "external action (no shell, browser, proxy, search, or report tool calls). You "
+            "are repeating yourself. Take a concrete action now -- probe the target, read "
+            "code, or write up what you have -- or call agent_finish. At "
+            f"{limit} consecutive stall turns this agent is force-stopped and its "
+            f"in-progress work is discarded. {_wrapup_directive(context, stage)}"
+        )
+        input_items.append({"role": "user", "content": content})
 
     def _maybe_warn_turns(
         self,
@@ -228,11 +324,23 @@ class ReportUsageHooks(RunHooks[dict[str, Any]]):
         agent: Agent[dict[str, Any]],
         response: ModelResponse,
     ) -> None:
+        ctx = context.context if isinstance(context.context, dict) else {}
+        # Stall reset: any function_call in the response for a tool outside the
+        # bookkeeping allowlist is external progress. This catches SDK-hosted
+        # sandbox tools (shell, browser) too -- they never reach the local tool
+        # path, but the model's tool-call request is right here in the output.
+        for item in response.output or []:
+            if (
+                getattr(item, "type", None) == "function_call"
+                and getattr(item, "name", "") not in _STALL_FREE_TOOLS
+            ):
+                ctx[STALL_TURN_KEY] = 0
+                break
+
         report_state = get_global_report_state()
         if report_state is None:
             return
 
-        ctx = context.context if isinstance(context.context, dict) else {}
         agent_name = getattr(agent, "name", None)
         if not isinstance(agent_name, str):
             agent_name = None
