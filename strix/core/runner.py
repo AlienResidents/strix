@@ -255,7 +255,7 @@ async def run_strix_scan(
     chat_completions_tools = uses_chat_completions_tool_schema(resolved_model, settings)
     strict_tool_schemas = supports_strict_tool_schemas(resolved_model)
     if not strict_tool_schemas:
-        logger.info("Sending non-strict tool schemas: %s caps strict tools", resolved_model)
+        logger.info("Sending non-strict tool schemas for route: %s", resolved_model)
 
     if coordinator is None:
         coordinator = AgentCoordinator()
@@ -371,6 +371,7 @@ async def run_strix_scan(
             max_budget_usd=max_budget_usd,
             max_turns=max_turns,
             interactive=interactive,
+            stall_turn_limit=settings.llm.stall_turn_limit,
         )
         if interactive:
             coordinator.set_budget_extender(hooks.extend_budget)
@@ -428,6 +429,7 @@ async def run_strix_scan(
                         }
                         for summary in mcp_registry.summaries()
                     ]
+
                     # Feed a non-secret connection roster (name / provider /
                     # tool_count / dead) to two consumers: once now (all
                     # currently healthy) and again whenever a connection later

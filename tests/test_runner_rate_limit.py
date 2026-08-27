@@ -37,6 +37,8 @@ async def test_persistent_rate_limit_stops_gracefully(
     settings = types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="openai/gpt-4o",
+            api_base=None,
+            stall_turn_limit=80,
             reasoning_effort="high",
             force_required_tool_choice=False,
             timeout=300,
