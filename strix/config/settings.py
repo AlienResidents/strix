@@ -63,6 +63,11 @@ class LlmSettings(BaseSettings):
         ge=0,
         alias="LLM_MAX_TOOL_CALLS_PER_TURN",
     )
+    stall_turn_limit: int = Field(
+        default=80,
+        ge=0,
+        alias="STRIX_STALL_TURN_LIMIT",
+    )
 
 
 class DedupeSettings(BaseSettings):

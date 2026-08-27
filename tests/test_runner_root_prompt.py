@@ -33,6 +33,8 @@ def _patch_engine_scaffold(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Any,
     scope_context: dict[str, Any],
+    *,
+    api_base: str | None = None,
 ) -> dict[str, Any]:
     """Stub out everything around build_strix_agent and stop at run_agent_loop.
 
@@ -47,6 +49,8 @@ def _patch_engine_scaffold(
     settings = types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="openai/gpt-4o",
+            api_base=api_base,
+            stall_turn_limit=80,
             reasoning_effort="high",
             force_required_tool_choice=False,
             timeout=300,
@@ -87,7 +91,12 @@ def _patch_engine_scaffold(
         return object()
 
     monkeypatch.setattr(runner, "build_strix_agent", _build_strix_agent)
-    monkeypatch.setattr(runner, "make_child_factory", lambda **_kwargs: lambda **_k: object())
+
+    def _make_child_factory(**kwargs: Any) -> Any:
+        captured["child_factory_kwargs"] = kwargs
+        return lambda **_k: object()
+
+    monkeypatch.setattr(runner, "make_child_factory", _make_child_factory)
     monkeypatch.setattr(runner, "open_agent_session", lambda _root_id, _db: object())
 
     async def _raise_rate_limit(*_args: Any, **kwargs: Any) -> None:
@@ -180,6 +189,29 @@ async def test_root_prompt_options_default_to_none(
     kwargs = captured["kwargs"]
     assert kwargs["instructions_override"] is None
     assert kwargs["system_prompt_context"] == {"scope": "built-in"}
+
+
+@pytest.mark.asyncio
+async def test_custom_api_base_disables_strict_tools_for_all_agents(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Any,
+) -> None:
+    captured = _patch_engine_scaffold(
+        monkeypatch,
+        tmp_path,
+        {"scope": "built-in"},
+        api_base="https://openai-compatible.example/v1",
+    )
+
+    await runner.run_strix_scan(
+        scan_config={"targets": [], "scan_mode": "deep"},
+        scan_id="scan-custom-api-base",
+        image="img",
+        coordinator=AgentCoordinator(),
+    )
+
+    assert captured["kwargs"]["strict_tool_schemas"] is False
+    assert captured["child_factory_kwargs"]["strict_tool_schemas"] is False
 
 
 @pytest.mark.asyncio

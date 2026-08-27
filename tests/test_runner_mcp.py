@@ -27,6 +27,8 @@ def _settings() -> Any:
     return types.SimpleNamespace(
         llm=types.SimpleNamespace(
             model="openai/gpt-4o",
+            api_base=None,
+            stall_turn_limit=80,
             reasoning_effort="high",
             force_required_tool_choice=False,
             timeout=300,
@@ -185,6 +187,4 @@ async def test_roster_is_persisted_even_without_a_status_sink(
     )
 
     assert persisted, "roster must persist even when no status sink is attached"
-    assert persisted[-1] == [
-        {"name": "local_fs", "provider": None, "tool_count": 3, "dead": False}
-    ]
+    assert persisted[-1] == [{"name": "local_fs", "provider": None, "tool_count": 3, "dead": False}]

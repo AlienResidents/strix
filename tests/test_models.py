@@ -103,7 +103,7 @@ def test_non_frontier_models_are_rejected(model_name: str) -> None:
     ],
 )
 def test_claude_routes_reject_strict_tool_schemas(model_name: str) -> None:
-    assert not supports_strict_tool_schemas(model_name)
+    assert not supports_strict_tool_schemas(model_name, api_base=None)
 
 
 @pytest.mark.parametrize(
@@ -111,4 +111,14 @@ def test_claude_routes_reject_strict_tool_schemas(model_name: str) -> None:
     ["openai/gpt-5.4", "gpt-5.4", "gemini/gemini-3.1-pro-preview", "deepseek/deepseek-v4"],
 )
 def test_other_routes_keep_strict_tool_schemas(model_name: str) -> None:
-    assert supports_strict_tool_schemas(model_name)
+    assert supports_strict_tool_schemas(model_name, api_base=None)
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["openai/gpt-5.4", "gpt-5.4", "gemini/gemini-3.1-pro-preview"],
+)
+def test_custom_api_base_rejects_strict_tool_schemas(model_name: str) -> None:
+    assert not supports_strict_tool_schemas(
+        model_name, api_base="https://openai-compatible.example/v1"
+    )

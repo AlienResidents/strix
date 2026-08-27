@@ -749,14 +749,17 @@ def uses_chat_completions_tool_schema(model_name: str, settings: Settings) -> bo
     return not model_supports_reasoning(model_name)
 
 
-def supports_strict_tool_schemas(model_name: str) -> bool:
-    """Return whether the route accepts strict tool schemas for Strix's toolset.
+def supports_strict_tool_schemas(model_name: str, *, api_base: str | None) -> bool:
+    """Return whether the resolved route accepts strict schemas for Strix's toolset.
 
-    Claude caps a request at 20 strict tools and 16 union-typed parameters
-    across all strict schemas. Strix ships ~30 tools and the strict dialect
-    turns every optional parameter into a nullable union, so both caps are
-    exceeded and the request is rejected outright.
+    Custom OpenAI-compatible endpoints do not reliably implement OpenAI's strict
+    function-tool dialect. Claude also caps a request at 20 strict tools and 16
+    union-typed parameters across all strict schemas. Strix ships ~30 tools and
+    the strict dialect turns every optional parameter into a nullable union, so
+    either route can reject the request outright.
     """
+    if api_base:
+        return False
     name = model_name.strip().lower()
     return not any(marker in name for marker in _ANTHROPIC_MODEL_MARKERS)
 
