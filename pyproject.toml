@@ -44,10 +44,8 @@ dependencies = [
   "cvss>=3.2",
   "caido-sdk-client>=0.2.0",
   "reportlab>=4.0",
-  "pypdf>=5.0",
-  # Cap <49: 49.x drops the universal2 macOS wheel (arm64-only), which breaks
-  # the Intel macOS (macos-x86_64) release build's `uv sync --frozen`.
-  "cryptography>=48.0.1,<49",
+  "pypdf>=6.15.0",
+  "cryptography>=50.0.0",
   "pyyaml>=6.0",
 ]
 
@@ -394,3 +392,7 @@ known_third_party = ["pydantic", "litellm"]
 exclude_dirs = ["docs", "build", "dist"]
 skips = ["B101", "B601", "B404", "B603", "B607"]  # Skip assert, shell injection, subprocess import and partial path checks
 severity = "medium"
+[tool.uv]
+constraint-dependencies = [
+  "aiohttp>=3.14.3",
+]
