@@ -8,7 +8,7 @@ import inspect
 import logging
 import os
 import time
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Sequence
 from typing import TYPE_CHECKING, Any, cast
 
 from agents import (
@@ -66,6 +66,62 @@ def request_timeout_extra_args(timeout_s: float | None) -> dict[str, float] | No
     if not timeout_s or timeout_s <= 0:
         return None
     return {"timeout": timeout_s}
+
+
+_REASONING_EFFORT_LADDER: tuple[str, ...] = ("minimal", "low", "medium", "high", "xhigh", "max")
+
+
+def resolve_reasoning_effort(
+    effort: ReasoningEffort | None,
+    *,
+    supported: Sequence[str] | None = None,
+) -> str | None:
+    """Map a configured reasoning effort to the value to send for a given route.
+
+    ``ReasoningEffort`` is a superset of what every route accepts: OpenRouter
+    reports ``reasoning.supported_efforts`` per model and rejects values outside
+    it, while other gateways accept a different subset. This resolves the
+    operator's request into a value the route will not reject.
+
+    Returns ``None`` when ``effort`` is ``None`` or ``"none"``, meaning send
+    nothing and let the provider's default stand. Returning ``None`` for
+    ``"none"`` is deliberate: ``z-ai/glm-5.3`` reports ``mandatory: true`` on
+    OpenRouter, so sending ``effort: "none"`` is rejected by the gateway, and
+    silently sending nothing is strictly safer than erroring.
+
+    When ``supported`` is ``None`` the effort is returned unchanged -- an unknown
+    route gets the operator's literal request. ``get_model`` always calls with
+    ``supported=None`` because a network catalog lookup inside the model
+    constructor would be a latency and failure-mode regression; the parameter is
+    not dead, it exists so the mapping is unit-testable now and so a future
+    catalog-aware caller can use it.
+
+    When ``supported`` is given, the effort degrades to the nearest supported
+    value without ever silently escalating above what was asked. The ladder is
+    ``minimal < low < medium < high < xhigh < max``. The closest supported value
+    at or below the request wins; only if none exists below does the lowest
+    supported value above the request get used.
+    """
+    if effort is None or effort == "none":
+        return None
+    if supported is None:
+        return effort
+    supported_set = set(supported)
+    if effort in supported_set:
+        return effort
+    # Degrade toward the nearest supported effort, never escalating above the
+    # request. Prefer the closest value at or below; only if none exists below
+    # take the lowest value above. Iterating the ladder keeps this independent
+    # of the order ``supported`` arrives in.
+    idx = _REASONING_EFFORT_LADDER.index(effort)
+    below = [e for e in _REASONING_EFFORT_LADDER[:idx] if e in supported_set]
+    if below:
+        return below[-1]
+    above = [e for e in _REASONING_EFFORT_LADDER[idx + 1 :] if e in supported_set]
+    if above:
+        return above[0]
+    # No comparable supported value at all; keep the operator's literal request.
+    return effort
 
 
 def _retry_statusless_provider_errors(context: RetryPolicyContext) -> bool:

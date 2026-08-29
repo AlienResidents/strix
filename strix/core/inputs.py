@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 from agents.model_settings import ModelSettings
 from openai.types.shared import Reasoning
 
+from strix.config import codex
 from strix.config.models import (
     DEFAULT_MODEL_RETRY,
     OPENROUTER_ATTRIBUTION_HEADERS,
@@ -34,6 +35,27 @@ def _accepts_required_tool_choice(model_name: str | None) -> bool:
             name = name[len(prefix) :]
             break
     return name.startswith("openai/") or is_known_openai_bare_model(name)
+
+
+def _is_openai_route(model_name: str | None) -> bool:
+    """Whether ``model_name`` routes through the OpenAI-compatible path.
+
+    An explicit ``openai/`` prefix is how Strix points at an OpenAI-compatible
+    endpoint (OpenRouter and similar) whose LiteLLM ``supports_reasoning`` map
+    is incomplete or absent. For those routes an operator-set reasoning effort
+    must not be dropped just because the hardcoded map says the model is not
+    reasoning-capable -- OpenRouter's own catalog reports the supported efforts,
+    and all three Strix OpenRouter models (GLM, Kimi, DeepSeek) accept an
+    effort even though litellm does not list them. The prefix strips the same
+    literal ``litellm/``/``any-llm/`` wrappers as ``_accepts_required_tool_choice``
+    so a routed OpenAI-compatible model is recognised too.
+    """
+    name = (model_name or "").strip().lower()
+    for prefix in ("litellm/", "any-llm/"):
+        if name.startswith(prefix):
+            name = name[len(prefix) :]
+            break
+    return name.startswith("openai/")
 
 
 def _render_diff_scope(diff_scope: dict[str, Any]) -> list[str]:
@@ -265,7 +287,8 @@ def make_model_settings(
     if (
         reasoning_effort is not None
         and reasoning_effort != "none"
-        and model_supports_reasoning(model_name)
+        and not codex.subscription_model(model_name)
+        and (model_supports_reasoning(model_name) or _is_openai_route(model_name))
     ):
         model_settings = model_settings.resolve(
             _reasoning_settings(reasoning_effort),
