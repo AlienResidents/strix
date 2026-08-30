@@ -46,9 +46,6 @@ def validate_environment() -> None:
     if not settings.llm.api_base:
         missing_optional_vars.append("LLM_API_BASE")
 
-    if not settings.integrations.perplexity_api_key:
-        missing_optional_vars.append("PERPLEXITY_API_KEY")
-
     if missing_required_vars:
         error_text = Text()
         error_text.append("MISSING REQUIRED ENVIRONMENT VARIABLES", style="bold red")
@@ -85,13 +82,6 @@ def validate_environment() -> None:
                         " - Custom API base URL if using local models (e.g., Ollama, LMStudio)\n",
                         style="white",
                     )
-                elif var == "PERPLEXITY_API_KEY":
-                    error_text.append("• ", style="white")
-                    error_text.append("PERPLEXITY_API_KEY", style="bold cyan")
-                    error_text.append(
-                        " - API key for Perplexity AI web search (enables real-time research)\n",
-                        style="white",
-                    )
                 elif var == "STRIX_REASONING_EFFORT":
                     error_text.append("• ", style="white")
                     error_text.append("STRIX_REASONING_EFFORT", style="bold cyan")
@@ -111,10 +101,6 @@ def validate_environment() -> None:
                         "export LLM_API_BASE='http://localhost:11434'  "
                         "# needed for local models only\n",
                         style="dim white",
-                    )
-                elif var == "PERPLEXITY_API_KEY":
-                    error_text.append(
-                        "export PERPLEXITY_API_KEY='your-perplexity-key-here'\n", style="dim white"
                     )
                 elif var == "STRIX_REASONING_EFFORT":
                     error_text.append(
