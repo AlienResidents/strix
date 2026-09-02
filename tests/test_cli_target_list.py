@@ -86,6 +86,28 @@ def test_parse_arguments_rejects_resume_with_target_list(
     assert "Cannot combine --resume with --target/--target-list" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("flag", ["workspace", "read_only"])
+def test_parse_arguments_rejects_resume_with_containment_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    flag: str,
+) -> None:
+    argv = ["strix", "--resume", "old-run"]
+    if flag == "workspace":
+        workspace = tmp_path / "remediation"
+        workspace.mkdir()
+        argv.extend(["--workspace-mount", str(workspace)])
+    else:
+        argv.append("--read-only-local-targets")
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit):
+        cli_main.parse_arguments()
+
+    assert "Resume restores the original containment configuration" in capsys.readouterr().err
+
+
 def _write_run_record(runs_dir: Path, run_name: str, record: dict[str, Any]) -> None:
     """Write a resumable run: its record plus the agent snapshot resume needs."""
     run_dir = runs_dir / run_name
