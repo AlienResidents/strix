@@ -91,13 +91,10 @@ class TuiController:
         self.scope_mode = requested_scope if requested_scope in SCOPE_MODES else "auto"
         raw_diff_base = args.diff_base
         self.diff_base = raw_diff_base.strip() if isinstance(raw_diff_base, str) else None
-        # Host directory mounted for the agent to work in when the scan has no
-        # target, set only once the user confirms it. It is a workspace, not a
-        # target: it carries no scan scope, and the instruction is the only
-        # source of truth for what to do.
-        self.workspace_mount: str | None = None
-        # A target-less launch enters the live view and asks there before
-        # anything is prepared; this holds the directory awaiting that answer.
+        # Host directory mounted for the agent to work in. A CLI-provided path
+        # is already explicit; a target-less TUI launch without one asks before
+        # mounting the current directory.
+        self.workspace_mount: str | None = getattr(args, "workspace_mount", None) or None
         self.pending_workspace_mount: str | None = None
         self._pending_verify = True
         self.messages: list[dict[str, str]] = []
@@ -344,6 +341,9 @@ class TuiController:
             raise ValueError("No model configured. Set STRIX_LLM first.")
         if self._on_start is None:
             raise RuntimeError("Scan start is unavailable")
+        if not self.targets and self.workspace_mount:
+            await self._begin_scan(verify)
+            return {"started": True}
         if not self.targets:
             if not mount_working_dir:
                 raise ValueError("No target set. Add a target first.")
