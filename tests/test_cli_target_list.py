@@ -97,15 +97,19 @@ def test_parse_arguments_rejects_resume_with_containment_overrides(
     if flag == "workspace":
         workspace = tmp_path / "remediation"
         workspace.mkdir()
-        argv.extend(["--workspace-mount", str(workspace)])
+        expected_flag = "--workspace-mount"
+        argv.extend([expected_flag, str(workspace)])
     else:
-        argv.append("--read-only-local-targets")
+        expected_flag = "--read-only-local-targets"
+        argv.append(expected_flag)
     monkeypatch.setattr(sys, "argv", argv)
 
     with pytest.raises(SystemExit):
         cli_main.parse_arguments()
 
-    assert "Resume restores the original containment configuration" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert expected_flag in error
+    assert "Resume restores the original containment configuration" in error
 
 
 def _write_run_record(runs_dir: Path, run_name: str, record: dict[str, Any]) -> None:

@@ -216,6 +216,8 @@ def _same_location(left: Path, right: Path) -> bool:
 def _reject_workspace_overlap(workspace: Path, local_sources: list[dict[str, Any]]) -> None:
     workspace = workspace.expanduser().resolve()
     for source in local_sources:
+        # Only immutable evidence needs an alias guard. Two writable views do
+        # not weaken the containment contract.
         if not source.get("read_only"):
             continue
         evidence = Path(str(source["source_path"])).expanduser().resolve()

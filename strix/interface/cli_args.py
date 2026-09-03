@@ -376,11 +376,15 @@ Examples:
                 "--resume picks up where the prior run left off, including the "
                 "original target list."
             )
-        if args.workspace_mount or args.read_only_local_targets:
+        if args.workspace_mount:
             parser.error(
-                "Cannot combine --resume with --workspace-mount or "
-                "--read-only-local-targets. Resume restores the original "
-                "containment configuration."
+                "Cannot combine --resume with --workspace-mount. Resume restores "
+                "the original containment configuration."
+            )
+        if args.read_only_local_targets:
+            parser.error(
+                "Cannot combine --resume with --read-only-local-targets. Resume "
+                "restores the original containment configuration."
             )
         _load_resume_state(args, parser)
         agents_path = runtime_state_dir(run_dir_for(args.resume)) / "agents.json"
